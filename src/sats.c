@@ -25,6 +25,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <math.h>
 
 /* for select */
@@ -45,6 +47,7 @@
 #include "stats_utils.h"
 #include "savi.h"
 #include "time.h"
+#include "grid_coverage.h"
 
 
 unsigned int geomview_flag = FALSE;
@@ -337,7 +340,7 @@ sats_init()
 //added by tz
 
 extern int sockfd;
-extern struct sockaddr_in saddr;
+extern struct sockaddr_un saddr;
 
 void send_sats_coor()
 {
@@ -345,6 +348,11 @@ void send_sats_coor()
   char coors[102400] = {0};
   char temp[1024] = {0};
   int i = 0;
+
+  // Check if socket is connected
+  if (sockfd <= 0) {
+    return; // Skip if socket is not available
+  }
 
   inter = inter++;
 
@@ -366,9 +374,9 @@ void send_sats_coor()
     memset(temp, 0, sizeof(temp));
  }
 
-  sendto(sockfd, "ISL info start\r\n", strlen("ISL info start\r\n"), 0, (struct ckaddr*)&saddr, sizeof(saddr));
-  sendto(sockfd, coors, strlen(coors), 0, (struct ckaddr*)&saddr, sizeof(saddr));
-  sendto(sockfd, "ISL info end\r\n", strlen("ISL info end\r\n"), 0, (struct ckaddr*)&saddr, sizeof(saddr));
+  sendto(sockfd, "ISL info start\r\n", strlen("ISL info start\r\n"), 0, (struct sockaddr*)&saddr, sizeof(saddr));
+  sendto(sockfd, coors, strlen(coors), 0, (struct sockaddr*)&saddr, sizeof(saddr));
+  sendto(sockfd, "ISL info end\r\n", strlen("ISL info end\r\n"), 0, (struct sockaddr*)&saddr, sizeof(saddr));
 }
 
 /*
@@ -466,6 +474,7 @@ sats_update()
       coverage_decay();
       coverage_compute(constellation.satellites, FALSE, constellation.pcb);
       tracks_compute(constellation.satellites, constellation.pcb);
+      
       computed = TRUE;
 
       /* Pause briefly to avoid saturating the CPU. */
@@ -507,6 +516,9 @@ sats_update()
           single_step = FALSE;
           motion = FALSE;
         }
+
+        // 计算格网覆盖（无论是否重新计算卫星位置）
+        grid_coverage_compute(constellation.satellites, constellation.pcb);
 
         computed = FALSE;
       }

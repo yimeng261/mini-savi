@@ -277,12 +277,12 @@ proc main(rendering_menu) {submenu} {
 	    {"Show equatorial plane" plane_flag} \
 	    {"Show sunlight" sun_flag} \
 	    {"Show star field" stars_flag} \
-	    {} \
-	    {"Show central body" earth_flag} \
-	    {"Use simple Earth map" simple_earth_flag} \
-	    {"Use detailed Earth map" fancy_earth_flag} \
-	    {} \
-    	    {"Animate in Geomview" geomview_flag}
+        {} \
+        {"Show central body" earth_flag} \
+        {"Use simple Earth map" simple_earth_flag} \
+        {"Use detailed Earth map" fancy_earth_flag} \
+        {} \
+	    {"Grid control..." "grid(build)"}
     } else {
 	build_options_menu $submenu \
 	    {"Real-time mode" realtime_flag}
@@ -321,9 +321,12 @@ proc main(forwards) {} {
     }
     set playbar 0
 
-    #to mini-savi
-    puts $chan "forwards"
-    flush $chan
+    #to mini-savi (如果mininet服务器可用)
+    if {[info exists chan] && $chan != ""} {
+        if {[catch {puts $chan "forwards"; flush $chan} err]} {
+            puts stderr "SaVi: mininet通信失败: $err"
+        }
+    }
 }
 
 proc main(backwards) {} {
@@ -360,9 +363,12 @@ proc main(stop) {} {
     }
     set playbar 0
 
-    #to mini-savi
-    puts $chan "stop"
-    flush $chan
+    #to mini-savi (如果mininet服务器可用)
+    if {[info exists chan] && $chan != ""} {
+        if {[catch {puts $chan "stop"; flush $chan} err]} {
+            puts stderr "SaVi: mininet通信失败: $err"
+        }
+    }
 }
 
 proc main(restart) {} {
@@ -371,9 +377,12 @@ proc main(restart) {} {
     main(stop)
     satellites RESET
 
-    #to mini-savi
-    puts $chan "restart"
-    flush $chan
+    #to mini-savi (如果mininet服务器可用)
+    if {[info exists chan] && $chan != ""} {
+        if {[catch {puts $chan "restart"; flush $chan} err]} {
+            puts stderr "SaVi: mininet通信失败: $err"
+        }
+    }
 }
 
 proc main(exit) {} {
@@ -404,10 +413,14 @@ proc main(update) {} {
     puts satellites
 
     #to mini-savi
-    set chan [socket 127.0.0.1 12345]
-    puts $chan "constellation import start"
-    flush $chan
-    sleep 1
+    if {[catch {set chan [socket 127.0.0.1 12345]} err]} {
+        puts stderr "SaVi: mininet服务器未运行，跳过网络集成功能"
+        set chan ""
+    } else {
+        puts $chan "constellation import start"
+        flush $chan
+        sleep 1
+    }
 
     while {[satellites GET $i] != ""} {
         main(update_field) $i $chan
@@ -415,9 +428,12 @@ proc main(update) {} {
     }
 
     #to mini-savi
-    puts $chan "constellation import end"
-    flush $chan
-    sleep 1
+    if {$chan != ""} {
+        puts $chan "constellation import end"
+        flush $chan
+        sleep 1
+        close $chan
+    }
 
     if {$n > 0} {
         .main.cmd.lb delete $i [expr $i+$n-1]
@@ -458,8 +474,10 @@ proc main(update_field) {i chan} {
     .main.cmd.lb insert $i $line
 
     #to mini-savi
-    puts $chan $line
-    flush $chan
+    if {$chan != ""} {
+        puts $chan $line
+        flush $chan
+    }
 }
 
 proc main(show_sunlight) {} {

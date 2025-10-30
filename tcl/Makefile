@@ -11,7 +11,7 @@
 		geomview.tcl random.tcl about.tcl oe.tcl constellations.tcl \
 	        no_frames.tcl snapshot.tcl rosette.tcl star.tcl empty.tcl \
                 sunlight.tcl equator.tcl details.tcl helpfile.tcl \
-		load_url_tle.tcl
+		load_url_tle.tcl grid.tcl
 
      TCLSH = tclsh
 

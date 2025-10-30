@@ -876,8 +876,18 @@ proc build_options_menu {owner args} {
     # add commands to menu
     foreach arg $args {
 	if {[llength $arg] == 2} {
-	    $owner add checkbutton -label [lindex $arg 0] \
-		-variable [lindex $arg 1]
+	    # Check if second element is a command (contains parentheses) or a variable
+	    set second_elem [lindex $arg 1]
+	    if {[string match "*(*)" $second_elem]} {
+		# It's a command, add as regular menu item
+		$owner add command -label [lindex $arg 0] \
+		    -command $second_elem
+	    } else {
+		# It's a variable, add as checkbutton with command to handle flag changes
+		$owner add checkbutton -label [lindex $arg 0] \
+		    -variable $second_elem \
+		    -command "flag_change $second_elem {} w"
+	    }
 	} else {
 	    $owner add separator
 	}

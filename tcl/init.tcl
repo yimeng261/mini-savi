@@ -27,7 +27,8 @@ proc geomview_init {} {
 	   sphere_sat_flag fast_marker_sat_flag cones_flag footprints_flag \
 	   orbits_flag axes_flag stars_flag \
 	   earth_flag simple_earth_flag fancy_earth_flag texture_flag \
-	   geomview_flag geomview_dynamic_texture_flag COLOR
+	   geomview_flag geomview_dynamic_texture_flag COLOR \
+	   grid_flag grid_wireframe_flag
 
     satellites GV_BEGIN
 
@@ -55,6 +56,9 @@ proc geomview_init {} {
 
 
     trace variable geomview_flag w flag_change
+    trace variable grid_flag w flag_change
+    trace variable grid_wireframe_flag w flag_change
+    trace variable grid_coverage_flag w flag_change
 
     set satellites_flag 1
     set fast_marker_sat_flag 1
@@ -77,6 +81,10 @@ proc geomview_init {} {
 
     set geomview_dynamic_texture_flag 0
     set geomview_flag 1
+
+    set grid_flag 0
+    set grid_wireframe_flag 0
+    set grid_coverage_flag 1
 
     satellites GV_END
 }
@@ -193,7 +201,12 @@ proc app_init {} {
     coverage(init)
     fisheye(init)
     load_url_tle(init)
-
+    
+    # initialize grid system
+    if {$geomview_module == 1} {
+        grid(init)
+    }
+    
     # build top window
     set last_filename ""
     main(build)
@@ -356,6 +369,12 @@ proc flag_change {name element op} {
 	    coverage(labels_show_decay)
 	    coverage(update_decay)
 	}
+    } elseif {$name == "grid_flag"} {
+	if {$flag == 1} {grid(on)} else {grid(off)}
+    } elseif {$name == "grid_wireframe_flag"} {
+	if {$flag == 1} {grid_wireframe(on)} else {grid_wireframe(off)}
+    } elseif {$name == "grid_coverage_flag"} {
+	if {$flag == 1} {grid_coverage(on)} else {grid_coverage(off)}
     } else {
 	puts "Unrecognized flag: $name"
     }

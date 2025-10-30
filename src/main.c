@@ -32,6 +32,7 @@
 #include <unistd.h>
 #include <assert.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -51,7 +52,8 @@ static unsigned int create_socket_mininet(void);
 
 /* added by tz for mini-savi*/
 int sockfd = 0;
-struct sockaddr_in saddr;
+struct sockaddr_un saddr;
+#define SOCKET_PATH_MAIN "/tmp/mini_savi_main.sock"
 
 
 int
@@ -107,7 +109,9 @@ main(int argc, char *argv[])
   }
 
   /* loop until exit */
-  create_socket_mininet();
+  if (!create_socket_mininet()) {
+    error("Running SaVi in standalone mode without mininet integration.");
+  }
   while (sats_update() && tk_update());
 
   Tcl_DeleteInterp(interp);
@@ -117,22 +121,23 @@ main(int argc, char *argv[])
 
 static unsigned int create_socket_mininet(void)
 {
-  sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  sockfd = socket(AF_UNIX, SOCK_DGRAM, 0);
 
   if( sockfd == -1 )
   {
-    error_and_exit("create socket for mininet link info failed! ");
+    error("create Unix socket for mininet link info failed! Running in standalone mode.");
+    return FALSE;
   }
 
-  //struct sockaddr_in saddr;
+  //struct sockaddr_un saddr;
   memset(&saddr,0,sizeof(saddr));
-  saddr.sin_family = AF_INET;
-  saddr.sin_port = htons(12345);
-  saddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+  saddr.sun_family = AF_UNIX;
+  strncpy(saddr.sun_path, SOCKET_PATH_MAIN, sizeof(saddr.sun_path) - 1);
 
-  if(connect(sockfd,(struct sockaddr*)&saddr,sizeof(saddr)) < 0){
-    error_and_exit("socket connect failed! ");
-  }
+  // Unix socket不需要connect，直接发送数据
+  fprintf(stderr, "Unix socket created for mininet integration (path: %s)\n", SOCKET_PATH_MAIN);
+  
+  return TRUE;
 }
 
 

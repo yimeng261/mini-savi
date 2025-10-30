@@ -72,7 +72,8 @@ include Makefile_defs_$(ARCH)
 		stats_utils.c \
 		utils.c \
 		gv_utils.c \
-		tcl_utils.c
+		tcl_utils.c \
+		grid_coverage.c
 
     INCLUDES = \
 		$(INCLUDE_DIR)/Satellite.h \
@@ -86,7 +87,8 @@ include Makefile_defs_$(ARCH)
 		$(INCLUDE_DIR)/savi.h \
 		$(INCLUDE_DIR)/stats_utils.h \
 		$(INCLUDE_DIR)/tcl_utils.h \
-		$(INCLUDE_DIR)/utils.h
+		$(INCLUDE_DIR)/utils.h \
+		$(INCLUDE_DIR)/grid_coverage.h
 
 
    OTHER_SRCS = Makefile_defs_ Makefile_defs_linux Makefile_defs_cygwin \

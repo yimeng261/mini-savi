@@ -37,6 +37,7 @@
 #include "sats.h"
 #include "savi.h"
 #include "tcl_utils.h"
+#include "grid_coverage.h"
 
 extern Tcl_Interp *interp;	/* Interpreter for this application. */
 
@@ -163,6 +164,13 @@ static struct Key key[] = {
   {"GV_END", gv_end_cmd},
   {"GV_WAIT", gv_wait_cmd},
   {"GV_SEND", gv_send_cmd},
+
+  /* grid coverage commands */
+  {"GRID_COVERAGE_ON", grid_coverage_on_cmd},
+  {"GRID_COVERAGE_OFF", grid_coverage_off_cmd},
+  {"GRID_COVERAGE_SET_ANGLE", grid_coverage_set_angle_cmd},
+  {"GRID_COVERAGE_STATS", grid_coverage_stats_cmd},
+  {"GRID_COVERAGE_QUERY_CODE", grid_coverage_query_code_cmd},
 
   /* other */
   {"COLOR_UPDATE", coverage_color_update_cmd},
