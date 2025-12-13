@@ -57,3 +57,7 @@ bin/SaVi-linux.bin
 src/version.c
 tcl/mkindex.tcl
 tcl/tclIndex
+
+*.png
+*.pkl
+*.json

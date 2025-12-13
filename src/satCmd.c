@@ -167,6 +167,8 @@ static struct Key key[] = {
 
   /* grid coverage commands */
   {"GRID_COVERAGE_ON", grid_coverage_on_cmd},
+  {"GRID_COVERAGE_ON_LATLON", grid_coverage_on_latlon_cmd},
+  {"GRID_COVERAGE_ON_BOTH", grid_coverage_on_both_cmd},
   {"GRID_COVERAGE_OFF", grid_coverage_off_cmd},
   {"GRID_COVERAGE_SET_ANGLE", grid_coverage_set_angle_cmd},
   {"GRID_COVERAGE_STATS", grid_coverage_stats_cmd},

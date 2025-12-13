@@ -44,15 +44,23 @@ static struct sockaddr_un server_addr;
 
 /*
  * grid_coverage_init
- * 初始化格网覆盖系统
+ * 初始化格网覆盖系统（二十面体格网）
  */
 int grid_coverage_init(int grid_level) {
     
+    // 如果both_mode已开启，保留现有经纬度数据
+    if (grid_coverage.both_mode == 0) {
+        // 单模式：清理所有数据
+        grid_coverage_cleanup();
+    }
+    
+    grid_coverage.grid_type = GRID_TYPE_ICOSAHEDRAL;
     grid_coverage.grid_level = grid_level;
+    if (grid_coverage.both_mode == 0) {
+        grid_coverage.lat_divisions = 0;
+        grid_coverage.lon_divisions = 0;
+    }
     grid_coverage.coverage_angle = DEFAULT_COVERAGE_ANGLE_DEG * DEG_TO_RAD;
-    grid_coverage.cells = NULL;
-    grid_coverage.cell_count = 0;
-    grid_coverage.max_cells = 0;
     
     // 根据格网级别估算格网单元数量
     int estimated_cells = 20; // 基础二十面体
@@ -60,11 +68,11 @@ int grid_coverage_init(int grid_level) {
         estimated_cells *= 4;
     }
     
-    grid_coverage.max_cells = estimated_cells + 100; // 添加缓冲
-    grid_coverage.cells = malloc(grid_coverage.max_cells * sizeof(GridCell));
+    grid_coverage.max_ico_cells = estimated_cells + 100; // 添加缓冲
+    grid_coverage.ico_cells = malloc(grid_coverage.max_ico_cells * sizeof(GridCell));
     
-    if (!grid_coverage.cells) {
-        fprintf(stderr, "Failed to allocate memory for grid coverage cells\n");
+    if (!grid_coverage.ico_cells) {
+        fprintf(stderr, "Failed to allocate memory for icosahedral grid cells\n");
         return 0;
     }
     
@@ -75,6 +83,46 @@ int grid_coverage_init(int grid_level) {
         return 0;
     }
     
+    return 1;
+}
+
+/*
+ * grid_coverage_init_latlon
+ * 初始化格网覆盖系统（经纬度格网）
+ */
+int grid_coverage_init_latlon(int lat_divisions, int lon_divisions) {
+    
+    // 如果both_mode已开启，保留现有二十面体数据
+    if (grid_coverage.both_mode == 0) {
+        // 单模式：清理所有数据
+        grid_coverage_cleanup();
+    }
+    
+    grid_coverage.grid_type = GRID_TYPE_LATLON;
+    if (grid_coverage.both_mode == 0) {
+        grid_coverage.grid_level = 0;
+    }
+    grid_coverage.lat_divisions = lat_divisions;
+    grid_coverage.lon_divisions = lon_divisions;
+    grid_coverage.coverage_angle = DEFAULT_COVERAGE_ANGLE_DEG * DEG_TO_RAD;
+    
+    // 估算格网单元数量（每个矩形分成2个三角形）
+    int estimated_cells = lat_divisions * lon_divisions * 2 + 100;
+    
+    grid_coverage.max_latlon_cells = estimated_cells;
+    grid_coverage.latlon_cells = malloc(grid_coverage.max_latlon_cells * sizeof(GridCell));
+    
+    if (!grid_coverage.latlon_cells) {
+        fprintf(stderr, "Failed to allocate memory for latlon grid cells\n");
+        return 0;
+    }
+    
+    // 从文件加载经纬度格网数据
+    if (!grid_coverage_load_latlon_from_file(lat_divisions, lon_divisions)) {
+        fprintf(stderr, "Failed to load latlon grid data from file\n");
+        grid_coverage_cleanup();
+        return 0;
+    }
     
     return 1;
 }
@@ -84,27 +132,41 @@ int grid_coverage_init(int grid_level) {
  * 清理格网覆盖系统
  */
 void grid_coverage_cleanup(void) {
-    if (grid_coverage.cells) {
-        free(grid_coverage.cells);
-        grid_coverage.cells = NULL;
+    // 清理二十面体格网数据
+    if (grid_coverage.ico_cells) {
+        free(grid_coverage.ico_cells);
+        grid_coverage.ico_cells = NULL;
+    }
+    
+    // 清理经纬度格网数据
+    if (grid_coverage.latlon_cells) {
+        free(grid_coverage.latlon_cells);
+        grid_coverage.latlon_cells = NULL;
     }
     
     // 清理卫星覆盖记录
     if (grid_coverage.satellite_coverages) {
         for (int i = 0; i < grid_coverage.max_satellites; i++) {
-            if (grid_coverage.satellite_coverages[i].covered_grids) {
-                free(grid_coverage.satellite_coverages[i].covered_grids);
-                grid_coverage.satellite_coverages[i].covered_grids = NULL;
+            if (grid_coverage.satellite_coverages[i].covered_ico_grids) {
+                free(grid_coverage.satellite_coverages[i].covered_ico_grids);
+                grid_coverage.satellite_coverages[i].covered_ico_grids = NULL;
+            }
+            if (grid_coverage.satellite_coverages[i].covered_latlon_grids) {
+                free(grid_coverage.satellite_coverages[i].covered_latlon_grids);
+                grid_coverage.satellite_coverages[i].covered_latlon_grids = NULL;
             }
         }
         free(grid_coverage.satellite_coverages);
         grid_coverage.satellite_coverages = NULL;
     }
     
-    grid_coverage.cell_count = 0;
-    grid_coverage.max_cells = 0;
+    grid_coverage.ico_cell_count = 0;
+    grid_coverage.max_ico_cells = 0;
+    grid_coverage.latlon_cell_count = 0;
+    grid_coverage.max_latlon_cells = 0;
     grid_coverage.satellite_count = 0;
     grid_coverage.max_satellites = 0;
+    grid_coverage.both_mode = 0;
     grid_coverage_enabled = 0;
     
     // 清理socket连接
@@ -168,9 +230,9 @@ int grid_coverage_load_from_file(int level) {
         }
     }
     
-    // 读取面并创建格网单元
-    grid_coverage.cell_count = 0;
-    for (int i = 0; i < face_count && grid_coverage.cell_count < grid_coverage.max_cells; i++) {
+    // 读取面并创建格网单元  
+    grid_coverage.ico_cell_count = 0;
+    for (int i = 0; i < face_count && grid_coverage.ico_cell_count < grid_coverage.max_ico_cells; i++) {
         int v1, v2, v3;
         char qtree_code_str[QUADTREE_CODE_LENGTH] = {0};
         
@@ -194,13 +256,14 @@ int grid_coverage_load_from_file(int level) {
             continue;
         }
         
-        GridCell *cell = &grid_coverage.cells[grid_coverage.cell_count];
-        cell->grid_id = grid_coverage.cell_count;
+        GridCell *cell = &grid_coverage.ico_cells[grid_coverage.ico_cell_count];
+        cell->grid_id = grid_coverage.ico_cell_count;
+        cell->grid_type = GRID_TYPE_ICOSAHEDRAL;  // 设置格网类型
         
         // 解析四叉树编码
         if (!quadtree_string_to_code(qtree_code_str, &cell->qtree_code)) {
             fprintf(stderr, "Failed to parse quadtree code for grid %d: %s\n", 
-                    grid_coverage.cell_count, qtree_code_str);
+                    grid_coverage.ico_cell_count, qtree_code_str);
             free(vertices);
             fclose(fp);
             return 0;
@@ -248,13 +311,182 @@ int grid_coverage_load_from_file(int level) {
         cell->lat = sph.phi * RAD_TO_DEG;
         cell->lon = sph.theta * RAD_TO_DEG;
         
-        grid_coverage.cell_count++;
+        grid_coverage.ico_cell_count++;
     }
     
     free(vertices);
     fclose(fp);
     
-    fprintf(stderr, "Grid loading completed with quadtree codes from file\n");
+    fprintf(stderr, "Icosahedral grid loading completed: %d cells\n", grid_coverage.ico_cell_count);
+    
+    return 1;
+}
+
+/*
+ * grid_coverage_load_latlon_from_file
+ * 从OOGL文件加载经纬度格网数据
+ */
+int grid_coverage_load_latlon_from_file(int lat_divisions, int lon_divisions) {
+    char filename[256];
+    FILE *fp;
+    char line[512];
+    int vertex_count, face_count;
+    double (*vertices)[3] = NULL;
+    
+    // 构建文件路径
+    snprintf(filename, sizeof(filename), "./mini-savi/latlon_grid_%dx%d.oogl", 
+             lat_divisions, lon_divisions);
+    fprintf(stderr, "Attempting to load latlon grid file: %s\n", filename);
+    
+    fp = fopen(filename, "r");
+    if (!fp) {
+        fprintf(stderr, "Cannot open latlon grid file: %s\n", filename);
+        fprintf(stderr, "请先运行 latlon_grid_calc 生成经纬度格网文件\n");
+        return 0;
+    }
+    
+    // 跳过文件头直到找到OFF标记
+    while (fgets(line, sizeof(line), fp)) {
+        if (strncmp(line, "OFF", 3) == 0 || strncmp(line, "COFF", 4) == 0) {
+            break;
+        }
+    }
+    
+    // 读取顶点和面数量
+    if (!fgets(line, sizeof(line), fp) || 
+        sscanf(line, "%d %d %*d", &vertex_count, &face_count) != 2) {
+        fprintf(stderr, "Failed to read vertex/face counts from %s\n", filename);
+        fclose(fp);
+        return 0;
+    }
+    
+    fprintf(stderr, "Loading %d vertices and %d triangular faces\n", vertex_count, face_count);
+    
+    // 分配顶点数组
+    vertices = malloc(vertex_count * sizeof(double[3]));
+    if (!vertices) {
+        fprintf(stderr, "Failed to allocate memory for vertices\n");
+        fclose(fp);
+        return 0;
+    }
+    
+    // 读取顶点坐标
+    for (int i = 0; i < vertex_count; i++) {
+        if (!fgets(line, sizeof(line), fp)) {
+            fprintf(stderr, "Failed to read vertex %d\n", i);
+            free(vertices);
+            fclose(fp);
+            return 0;
+        }
+        
+        // COFF格式包含颜色信息，需要处理
+        double r, g, b, a;
+        int parsed = sscanf(line, "%lf %lf %lf %lf %lf %lf %lf", 
+                          &vertices[i][0], &vertices[i][1], &vertices[i][2],
+                          &r, &g, &b, &a);
+        
+        if (parsed < 3) {
+            fprintf(stderr, "Failed to parse vertex %d: %s\n", i, line);
+            free(vertices);
+            fclose(fp);
+            return 0;
+        }
+    }
+    
+    // 读取面并创建格网单元
+    grid_coverage.latlon_cell_count = 0;
+    for (int i = 0; i < face_count && grid_coverage.latlon_cell_count < grid_coverage.max_latlon_cells; i++) {
+        int v1, v2, v3;
+        char code_str[128] = {0};
+        
+        if (!fgets(line, sizeof(line), fp)) {
+            fprintf(stderr, "Failed to read face %d\n", i);
+            continue;
+        }
+        
+        // 解析包含经纬度编码的行: "3 v1 v2 v3 # LAT###_LON###_T#"
+        int parsed = sscanf(line, "3 %d %d %d # %127s", &v1, &v2, &v3, code_str);
+        if (parsed != 4) {
+            fprintf(stderr, "Invalid latlon grid file format at face %d\n", i);
+            fprintf(stderr, "Line: %s", line);
+            free(vertices);
+            fclose(fp);
+            return 0;
+        }
+        
+        if (v1 >= vertex_count || v2 >= vertex_count || v3 >= vertex_count) {
+            fprintf(stderr, "Invalid vertex indices in face %d\n", i);
+            continue;
+        }
+        
+        GridCell *cell = &grid_coverage.latlon_cells[grid_coverage.latlon_cell_count];
+        cell->grid_id = grid_coverage.latlon_cell_count;
+        cell->grid_type = GRID_TYPE_LATLON;
+        
+        // 解析经纬度编码 (格式: LAT###_LON###_T# 或 LAT###_LON###)
+        // 移除_T1或_T2后缀
+        char *underscore_t = strrchr(code_str, '_');
+        if (underscore_t && (strcmp(underscore_t, "_T1") == 0 || strcmp(underscore_t, "_T2") == 0)) {
+            *underscore_t = '\0'; // 截断_T1/_T2后缀
+        }
+        
+        if (!latlon_string_to_code(code_str, &cell->latlon_code)) {
+            fprintf(stderr, "Failed to parse latlon code for grid %d: %s\n", 
+                    grid_coverage.latlon_cell_count, code_str);
+            free(vertices);
+            fclose(fp);
+            return 0;
+        }
+        
+        // 将顶点坐标从显示位置(1.05半径)投影到地表(1.0半径)
+        for (int j = 0; j < 3; j++) {
+            double *vertex_src = NULL;
+            switch (j) {
+                case 0: vertex_src = vertices[v1]; break;
+                case 1: vertex_src = vertices[v2]; break;
+                case 2: vertex_src = vertices[v3]; break;
+            }
+            
+            // 归一化到地表
+            double length = sqrt(vertex_src[0]*vertex_src[0] + 
+                               vertex_src[1]*vertex_src[1] + 
+                               vertex_src[2]*vertex_src[2]);
+            if (length > 0) {
+                cell->vertices[j][0] = vertex_src[0] / length;
+                cell->vertices[j][1] = vertex_src[1] / length;
+                cell->vertices[j][2] = vertex_src[2] / length;
+            }
+        }
+        
+        // 计算格网中心点(地表坐标)
+        cell->surface_x = (cell->vertices[0][0] + cell->vertices[1][0] + cell->vertices[2][0]) / 3.0;
+        cell->surface_y = (cell->vertices[0][1] + cell->vertices[1][1] + cell->vertices[2][1]) / 3.0;
+        cell->surface_z = (cell->vertices[0][2] + cell->vertices[1][2] + cell->vertices[2][2]) / 3.0;
+        
+        // 归一化中心点到地表
+        double center_length = sqrt(cell->surface_x*cell->surface_x + 
+                                  cell->surface_y*cell->surface_y + 
+                                  cell->surface_z*cell->surface_z);
+        if (center_length > 0) {
+            cell->surface_x /= center_length;
+            cell->surface_y /= center_length;
+            cell->surface_z /= center_length;
+        }
+        
+        // 转换为经纬度
+        CartesianCoordinates cart = {cell->surface_x, cell->surface_y, cell->surface_z};
+        SphericalCoordinates sph;
+        cartesian_to_spherical(&sph, &cart);
+        cell->lat = sph.phi * RAD_TO_DEG;
+        cell->lon = sph.theta * RAD_TO_DEG;
+        
+        grid_coverage.latlon_cell_count++;
+    }
+    
+    free(vertices);
+    fclose(fp);
+    
+    fprintf(stderr, "LatLon grid loading completed: %d cells\n", grid_coverage.latlon_cell_count);
     
     return 1;
 }
@@ -409,7 +641,11 @@ static int satellite_covers_grid(const Satellite sat, const GridCell *cell,
  */
 void grid_coverage_compute(const Satellite_list satellites, const CentralBody *pcb) {
     
-    if (!grid_coverage_enabled || !grid_coverage.cells || !satellites) {
+    // 检查是否有任何格网数据
+    int has_grids = (grid_coverage.ico_cells && grid_coverage.ico_cell_count > 0) ||
+                    (grid_coverage.latlon_cells && grid_coverage.latlon_cell_count > 0);
+    
+    if (!grid_coverage_enabled || !has_grids || !satellites) {
         return;
     }
     
@@ -435,9 +671,12 @@ void grid_coverage_compute(const Satellite_list satellites, const CentralBody *p
         // 初始化新分配的部分
         for (int i = grid_coverage.max_satellites; i < current_satellite_count; i++) {
             grid_coverage.satellite_coverages[i].satellite_id = -1;
-            grid_coverage.satellite_coverages[i].covered_grids = NULL;
-            grid_coverage.satellite_coverages[i].coverage_count = 0;
-            grid_coverage.satellite_coverages[i].max_coverage = 0;
+            grid_coverage.satellite_coverages[i].covered_ico_grids = NULL;
+            grid_coverage.satellite_coverages[i].ico_coverage_count = 0;
+            grid_coverage.satellite_coverages[i].max_ico_coverage = 0;
+            grid_coverage.satellite_coverages[i].covered_latlon_grids = NULL;
+            grid_coverage.satellite_coverages[i].latlon_coverage_count = 0;
+            grid_coverage.satellite_coverages[i].max_latlon_coverage = 0;
         }
         
         grid_coverage.max_satellites = current_satellite_count;
@@ -445,7 +684,8 @@ void grid_coverage_compute(const Satellite_list satellites, const CentralBody *p
     
     // 清除之前的覆盖记录
     for (int i = 0; i < grid_coverage.satellite_count; i++) {
-        grid_coverage.satellite_coverages[i].coverage_count = 0;
+        grid_coverage.satellite_coverages[i].ico_coverage_count = 0;
+        grid_coverage.satellite_coverages[i].latlon_coverage_count = 0;
     }
     
     // 遍历所有卫星，计算每个卫星覆盖的格网
@@ -458,32 +698,98 @@ void grid_coverage_compute(const Satellite_list satellites, const CentralBody *p
         int satellite_id = sl->s->id;
         SatelliteCoverage *sat_cov = &grid_coverage.satellite_coverages[grid_coverage.satellite_count];
         sat_cov->satellite_id = satellite_id;
-        sat_cov->coverage_count = 0;
+        sat_cov->ico_coverage_count = 0;
+        sat_cov->latlon_coverage_count = 0;
         
-        
-        // 检查此卫星覆盖哪些格网
-        for (int i = 0; i < grid_coverage.cell_count; i++) {
-            GridCell *cell = &grid_coverage.cells[i];
-            
-            if (satellite_covers_grid(sl->s, cell, grid_coverage.coverage_angle, pcb)) {
-                // 确保数组足够大
-                if (sat_cov->coverage_count >= sat_cov->max_coverage) {
-                    int new_size = sat_cov->max_coverage == 0 ? 16 : sat_cov->max_coverage * 2;
-                    sat_cov->covered_grids = realloc(sat_cov->covered_grids, new_size * sizeof(int));
-                    if (!sat_cov->covered_grids) {
-                        fprintf(stderr, "Failed to allocate grid coverage array for satellite %d\n", satellite_id);
-                        continue;
-                    }
-                    sat_cov->max_coverage = new_size;
-                }
+        // 根据当前模式处理格网
+        if (grid_coverage.both_mode) {
+            // Both模式：分别处理两种格网
+            // 处理二十面体格网
+            for (int i = 0; i < grid_coverage.ico_cell_count; i++) {
+                GridCell *cell = &grid_coverage.ico_cells[i];
                 
-                // 添加格网到覆盖列表
-                sat_cov->covered_grids[sat_cov->coverage_count] = cell->grid_id;
-                sat_cov->coverage_count++;
-                total_coverage++;
+                if (satellite_covers_grid(sl->s, cell, grid_coverage.coverage_angle, pcb)) {
+                    // 确保数组足够大
+                    if (sat_cov->ico_coverage_count >= sat_cov->max_ico_coverage) {
+                        int new_size = sat_cov->max_ico_coverage == 0 ? 16 : sat_cov->max_ico_coverage * 2;
+                        sat_cov->covered_ico_grids = realloc(sat_cov->covered_ico_grids, new_size * sizeof(int));
+                        if (!sat_cov->covered_ico_grids) {
+                            fprintf(stderr, "Failed to allocate ico grid coverage array for satellite %d\n", satellite_id);
+                            continue;
+                        }
+                        sat_cov->max_ico_coverage = new_size;
+                    }
+                    
+                    sat_cov->covered_ico_grids[sat_cov->ico_coverage_count] = i;
+                    sat_cov->ico_coverage_count++;
+                    total_coverage++;
+                }
+            }
+            
+            // 处理经纬度格网
+            for (int i = 0; i < grid_coverage.latlon_cell_count; i++) {
+                GridCell *cell = &grid_coverage.latlon_cells[i];
+                
+                if (satellite_covers_grid(sl->s, cell, grid_coverage.coverage_angle, pcb)) {
+                    // 确保数组足够大
+                    if (sat_cov->latlon_coverage_count >= sat_cov->max_latlon_coverage) {
+                        int new_size = sat_cov->max_latlon_coverage == 0 ? 16 : sat_cov->max_latlon_coverage * 2;
+                        sat_cov->covered_latlon_grids = realloc(sat_cov->covered_latlon_grids, new_size * sizeof(int));
+                        if (!sat_cov->covered_latlon_grids) {
+                            fprintf(stderr, "Failed to allocate latlon grid coverage array for satellite %d\n", satellite_id);
+                            continue;
+                        }
+                        sat_cov->max_latlon_coverage = new_size;
+                    }
+                    
+                    sat_cov->covered_latlon_grids[sat_cov->latlon_coverage_count] = i;
+                    sat_cov->latlon_coverage_count++;
+                    total_coverage++;
+                }
+            }
+        } else if (grid_coverage.grid_type == GRID_TYPE_ICOSAHEDRAL) {
+            // 仅二十面体模式
+            for (int i = 0; i < grid_coverage.ico_cell_count; i++) {
+                GridCell *cell = &grid_coverage.ico_cells[i];
+                
+                if (satellite_covers_grid(sl->s, cell, grid_coverage.coverage_angle, pcb)) {
+                    if (sat_cov->ico_coverage_count >= sat_cov->max_ico_coverage) {
+                        int new_size = sat_cov->max_ico_coverage == 0 ? 16 : sat_cov->max_ico_coverage * 2;
+                        sat_cov->covered_ico_grids = realloc(sat_cov->covered_ico_grids, new_size * sizeof(int));
+                        if (!sat_cov->covered_ico_grids) {
+                            fprintf(stderr, "Failed to allocate ico grid coverage array for satellite %d\n", satellite_id);
+                            continue;
+                        }
+                        sat_cov->max_ico_coverage = new_size;
+                    }
+                    
+                    sat_cov->covered_ico_grids[sat_cov->ico_coverage_count] = i;
+                    sat_cov->ico_coverage_count++;
+                    total_coverage++;
+                }
+            }
+        } else {
+            // 仅经纬度模式
+            for (int i = 0; i < grid_coverage.latlon_cell_count; i++) {
+                GridCell *cell = &grid_coverage.latlon_cells[i];
+                
+                if (satellite_covers_grid(sl->s, cell, grid_coverage.coverage_angle, pcb)) {
+                    if (sat_cov->latlon_coverage_count >= sat_cov->max_latlon_coverage) {
+                        int new_size = sat_cov->max_latlon_coverage == 0 ? 16 : sat_cov->max_latlon_coverage * 2;
+                        sat_cov->covered_latlon_grids = realloc(sat_cov->covered_latlon_grids, new_size * sizeof(int));
+                        if (!sat_cov->covered_latlon_grids) {
+                            fprintf(stderr, "Failed to allocate latlon grid coverage array for satellite %d\n", satellite_id);
+                            continue;
+                        }
+                        sat_cov->max_latlon_coverage = new_size;
+                    }
+                    
+                    sat_cov->covered_latlon_grids[sat_cov->latlon_coverage_count] = i;
+                    sat_cov->latlon_coverage_count++;
+                    total_coverage++;
+                }
             }
         }
-        
         
         grid_coverage.satellite_count++;
     }
@@ -501,7 +807,9 @@ void grid_coverage_set_angle(double angle_degrees) {
     fprintf(stderr, "Grid coverage angle set to %.1f degrees\n", angle_degrees);
     
     // 立即重新计算覆盖
-    if (grid_coverage_enabled && grid_coverage.cells) {
+    int has_grids = (grid_coverage.ico_cells && grid_coverage.ico_cell_count > 0) ||
+                    (grid_coverage.latlon_cells && grid_coverage.latlon_cell_count > 0);
+    if (grid_coverage_enabled && has_grids) {
         Constellation *constellation = get_constellation();
         if (constellation && constellation->satellites && constellation->pcb) {
             fprintf(stderr, "Recalculating coverage with new angle...\n");
@@ -534,17 +842,26 @@ int grid_coverage_get_satellite_coverage(int satellite_id, int **covered_grids) 
         }
     }
     
-    if (!sat_cov || sat_cov->coverage_count == 0) {
+    if (!sat_cov) {
         *covered_grids = NULL;
         return 0;
     }
     
-    // 分配并复制结果数组
-    *covered_grids = malloc(sat_cov->coverage_count * sizeof(int));
-    if (!*covered_grids) return 0;
+    // 根据当前模式返回相应的覆盖数据
+    if (grid_coverage.grid_type == GRID_TYPE_ICOSAHEDRAL && sat_cov->ico_coverage_count > 0) {
+        *covered_grids = malloc(sat_cov->ico_coverage_count * sizeof(int));
+        if (!*covered_grids) return 0;
+        memcpy(*covered_grids, sat_cov->covered_ico_grids, sat_cov->ico_coverage_count * sizeof(int));
+        return sat_cov->ico_coverage_count;
+    } else if (grid_coverage.grid_type == GRID_TYPE_LATLON && sat_cov->latlon_coverage_count > 0) {
+        *covered_grids = malloc(sat_cov->latlon_coverage_count * sizeof(int));
+        if (!*covered_grids) return 0;
+        memcpy(*covered_grids, sat_cov->covered_latlon_grids, sat_cov->latlon_coverage_count * sizeof(int));
+        return sat_cov->latlon_coverage_count;
+    }
     
-    memcpy(*covered_grids, sat_cov->covered_grids, sat_cov->coverage_count * sizeof(int));
-    return sat_cov->coverage_count;
+    *covered_grids = NULL;
+    return 0;
 }
 
 /*
@@ -552,7 +869,19 @@ int grid_coverage_get_satellite_coverage(int satellite_id, int **covered_grids) 
  * 获取覆盖指定格网的卫星列表
  */
 int grid_coverage_get_grid_coverage(int grid_id, int **covering_satellites) {
-    if (!grid_coverage.satellite_coverages || grid_id < 0 || grid_id >= grid_coverage.cell_count || !covering_satellites) {
+    if (!grid_coverage.satellite_coverages || !covering_satellites) {
+        return 0;
+    }
+    
+    // 根据当前模式检查grid_id有效性
+    int max_grid_id = 0;
+    if (grid_coverage.grid_type == GRID_TYPE_ICOSAHEDRAL) {
+        max_grid_id = grid_coverage.ico_cell_count;
+    } else if (grid_coverage.grid_type == GRID_TYPE_LATLON) {
+        max_grid_id = grid_coverage.latlon_cell_count;
+    }
+    
+    if (grid_id < 0 || grid_id >= max_grid_id) {
         return 0;
     }
     
@@ -560,10 +889,20 @@ int grid_coverage_get_grid_coverage(int grid_id, int **covering_satellites) {
     int count = 0;
     for (int i = 0; i < grid_coverage.satellite_count; i++) {
         SatelliteCoverage *sat_cov = &grid_coverage.satellite_coverages[i];
-        for (int j = 0; j < sat_cov->coverage_count; j++) {
-            if (sat_cov->covered_grids[j] == grid_id) {
-                count++;
-                break;
+        
+        if (grid_coverage.grid_type == GRID_TYPE_ICOSAHEDRAL) {
+            for (int j = 0; j < sat_cov->ico_coverage_count; j++) {
+                if (sat_cov->covered_ico_grids[j] == grid_id) {
+                    count++;
+                    break;
+                }
+            }
+        } else if (grid_coverage.grid_type == GRID_TYPE_LATLON) {
+            for (int j = 0; j < sat_cov->latlon_coverage_count; j++) {
+                if (sat_cov->covered_latlon_grids[j] == grid_id) {
+                    count++;
+                    break;
+                }
             }
         }
     }
@@ -580,10 +919,20 @@ int grid_coverage_get_grid_coverage(int grid_id, int **covering_satellites) {
     int index = 0;
     for (int i = 0; i < grid_coverage.satellite_count; i++) {
         SatelliteCoverage *sat_cov = &grid_coverage.satellite_coverages[i];
-        for (int j = 0; j < sat_cov->coverage_count; j++) {
-            if (sat_cov->covered_grids[j] == grid_id) {
-                (*covering_satellites)[index++] = sat_cov->satellite_id;
-                break;
+        
+        if (grid_coverage.grid_type == GRID_TYPE_ICOSAHEDRAL) {
+            for (int j = 0; j < sat_cov->ico_coverage_count; j++) {
+                if (sat_cov->covered_ico_grids[j] == grid_id) {
+                    (*covering_satellites)[index++] = sat_cov->satellite_id;
+                    break;
+                }
+            }
+        } else if (grid_coverage.grid_type == GRID_TYPE_LATLON) {
+            for (int j = 0; j < sat_cov->latlon_coverage_count; j++) {
+                if (sat_cov->covered_latlon_grids[j] == grid_id) {
+                    (*covering_satellites)[index++] = sat_cov->satellite_id;
+                    break;
+                }
             }
         }
     }
@@ -596,82 +945,117 @@ int grid_coverage_get_grid_coverage(int grid_id, int **covering_satellites) {
  * 打印覆盖统计信息
  */
 void grid_coverage_print_stats(void) {
-    if (!grid_coverage.cells) {
+    int has_grids = (grid_coverage.ico_cells && grid_coverage.ico_cell_count > 0) ||
+                    (grid_coverage.latlon_cells && grid_coverage.latlon_cell_count > 0);
+    
+    if (!has_grids) {
         fprintf(stderr, "=== Grid Coverage Statistics ===\n");
-        fprintf(stderr, "Grid coverage not initialized (no data available)\n");
+        fprintf(stderr, "Grid coverage not initialized\n");
         fprintf(stderr, "================================\n");
         return;
     }
     
-    // 统计被覆盖的格网数量（新的数据结构）
-    int *grid_coverage_count = calloc(grid_coverage.cell_count, sizeof(int));
-    if (!grid_coverage_count) {
-        fprintf(stderr, "Memory allocation failed for statistics\n");
-        return;
-    }
+    fprintf(stderr, "\n=== Grid Coverage Statistics ===\n");
     
-    int total_coverage_instances = 0;
-    int max_coverage_per_satellite = 0;
-    
-    // 统计每个卫星的覆盖情况
-    for (int i = 0; i < grid_coverage.satellite_count; i++) {
-        SatelliteCoverage *sat_cov = &grid_coverage.satellite_coverages[i];
-        total_coverage_instances += sat_cov->coverage_count;
+    if (grid_coverage.both_mode) {
+        fprintf(stderr, "Mode: BOTH (Icosahedral + Lat-Lon)\n\n");
         
-        if (sat_cov->coverage_count > max_coverage_per_satellite) {
-            max_coverage_per_satellite = sat_cov->coverage_count;
+        // 统计二十面体格网
+        fprintf(stderr, "--- Icosahedral Grid ---\n");
+        fprintf(stderr, "Grid level: %d\n", grid_coverage.grid_level);
+        fprintf(stderr, "Total cells: %d\n", grid_coverage.ico_cell_count);
+        
+        int ico_total = 0;
+        for (int i = 0; i < grid_coverage.satellite_count; i++) {
+            ico_total += grid_coverage.satellite_coverages[i].ico_coverage_count;
+        }
+        fprintf(stderr, "Total coverage instances: %d\n", ico_total);
+        if (grid_coverage.satellite_count > 0) {
+            fprintf(stderr, "Avg coverage per satellite: %.2f grids\n\n", 
+                    (double)ico_total / grid_coverage.satellite_count);
         }
         
-        // 统计每个格网被多少颗卫星覆盖
-        for (int j = 0; j < sat_cov->coverage_count; j++) {
-            int grid_id = sat_cov->covered_grids[j];
-            if (grid_id >= 0 && grid_id < grid_coverage.cell_count) {
-                grid_coverage_count[grid_id]++;
+        // 统计经纬度格网
+        fprintf(stderr, "--- Lat-Lon Grid ---\n");
+        fprintf(stderr, "Grid divisions: %d x %d (lat x lon)\n", 
+                grid_coverage.lat_divisions, grid_coverage.lon_divisions);
+        fprintf(stderr, "Total cells: %d\n", grid_coverage.latlon_cell_count);
+        
+        int latlon_total = 0;
+        for (int i = 0; i < grid_coverage.satellite_count; i++) {
+            latlon_total += grid_coverage.satellite_coverages[i].latlon_coverage_count;
+        }
+        fprintf(stderr, "Total coverage instances: %d\n", latlon_total);
+        if (grid_coverage.satellite_count > 0) {
+            fprintf(stderr, "Avg coverage per satellite: %.2f grids\n", 
+                    (double)latlon_total / grid_coverage.satellite_count);
+        }
+        
+    } else if (grid_coverage.grid_type == GRID_TYPE_ICOSAHEDRAL) {
+        fprintf(stderr, "Grid type: Icosahedral\n");
+        fprintf(stderr, "Grid level: %d\n", grid_coverage.grid_level);
+        fprintf(stderr, "Coverage angle: %.2f degrees\n", grid_coverage.coverage_angle * RAD_TO_DEG);
+        fprintf(stderr, "Total grid cells: %d\n", grid_coverage.ico_cell_count);
+        fprintf(stderr, "Active satellites: %d\n", grid_coverage.satellite_count);
+        
+        int total_coverage = 0;
+        int max_coverage = 0;
+        for (int i = 0; i < grid_coverage.satellite_count; i++) {
+            int count = grid_coverage.satellite_coverages[i].ico_coverage_count;
+            total_coverage += count;
+            if (count > max_coverage) max_coverage = count;
+        }
+        
+        fprintf(stderr, "Total coverage instances: %d\n", total_coverage);
+        if (grid_coverage.satellite_count > 0) {
+            fprintf(stderr, "Average coverage per satellite: %.2f grids\n", 
+                    (double)total_coverage / grid_coverage.satellite_count);
+        }
+        fprintf(stderr, "Max coverage per satellite: %d grids\n", max_coverage);
+        
+        // 示例格网编码
+        if (grid_coverage.ico_cell_count > 0) {
+            fprintf(stderr, "\nSample grid codes (first 5):\n");
+            int examples = grid_coverage.ico_cell_count < 5 ? grid_coverage.ico_cell_count : 5;
+            for (int i = 0; i < examples; i++) {
+                fprintf(stderr, "  Grid %d: %s\n", i, grid_coverage.ico_cells[i].qtree_code.code_string);
+            }
+        }
+        
+    } else {
+        fprintf(stderr, "Grid type: Lat-Lon\n");
+        fprintf(stderr, "Grid divisions: %d x %d (lat x lon)\n", 
+                grid_coverage.lat_divisions, grid_coverage.lon_divisions);
+        fprintf(stderr, "Coverage angle: %.2f degrees\n", grid_coverage.coverage_angle * RAD_TO_DEG);
+        fprintf(stderr, "Total grid cells: %d\n", grid_coverage.latlon_cell_count);
+        fprintf(stderr, "Active satellites: %d\n", grid_coverage.satellite_count);
+        
+        int total_coverage = 0;
+        int max_coverage = 0;
+        for (int i = 0; i < grid_coverage.satellite_count; i++) {
+            int count = grid_coverage.satellite_coverages[i].latlon_coverage_count;
+            total_coverage += count;
+            if (count > max_coverage) max_coverage = count;
+        }
+        
+        fprintf(stderr, "Total coverage instances: %d\n", total_coverage);
+        if (grid_coverage.satellite_count > 0) {
+            fprintf(stderr, "Average coverage per satellite: %.2f grids\n", 
+                    (double)total_coverage / grid_coverage.satellite_count);
+        }
+        fprintf(stderr, "Max coverage per satellite: %d grids\n", max_coverage);
+        
+        // 示例格网编码
+        if (grid_coverage.latlon_cell_count > 0) {
+            fprintf(stderr, "\nSample grid codes (first 5):\n");
+            int examples = grid_coverage.latlon_cell_count < 5 ? grid_coverage.latlon_cell_count : 5;
+            for (int i = 0; i < examples; i++) {
+                fprintf(stderr, "  Grid %d: %s\n", i, grid_coverage.latlon_cells[i].latlon_code.code_string);
             }
         }
     }
     
-    // 统计被覆盖的格网数量
-    int covered_cells = 0;
-    int max_satellites_per_cell = 0;
-    for (int i = 0; i < grid_coverage.cell_count; i++) {
-        if (grid_coverage_count[i] > 0) {
-            covered_cells++;
-            if (grid_coverage_count[i] > max_satellites_per_cell) {
-                max_satellites_per_cell = grid_coverage_count[i];
-            }
-        }
-    }
-    
-    double coverage_percentage = grid_coverage.cell_count > 0 ? (double)covered_cells / grid_coverage.cell_count * 100.0 : 0.0;
-    double avg_satellites_per_cell = covered_cells > 0 ? (double)total_coverage_instances / covered_cells : 0.0;
-    double avg_grids_per_satellite = grid_coverage.satellite_count > 0 ? (double)total_coverage_instances / grid_coverage.satellite_count : 0.0;
-    
-    fprintf(stderr, "=== Grid Coverage Statistics ===\n");
-    fprintf(stderr, "Total grid cells: %d\n", grid_coverage.cell_count);
-    fprintf(stderr, "Total satellites: %d\n", grid_coverage.satellite_count);
-    fprintf(stderr, "Covered cells: %d (%.1f%%)\n", covered_cells, coverage_percentage);
-    fprintf(stderr, "Average satellites per covered cell: %.1f\n", avg_satellites_per_cell);
-    fprintf(stderr, "Maximum satellites per cell: %d\n", max_satellites_per_cell);
-    fprintf(stderr, "Average grids per satellite: %.1f\n", avg_grids_per_satellite);
-    fprintf(stderr, "Max grids per satellite: %d\n", max_coverage_per_satellite);
-    fprintf(stderr, "Coverage angle: %.1f degrees\n", grid_coverage.coverage_angle * RAD_TO_DEG);
-    fprintf(stderr, "Grid level: %d\n", grid_coverage.grid_level);
-    
-    // 显示四叉树编码示例
-    if (grid_coverage.cell_count > 0) {
-        fprintf(stderr, "Quadtree encoding examples:\n");
-        int examples = grid_coverage.cell_count < 5 ? grid_coverage.cell_count : 5;
-        for (int i = 0; i < examples; i++) {
-            GridCell *cell = &grid_coverage.cells[i];
-            fprintf(stderr, "  Grid %d: %s (%.2f°, %.2f°)\n", 
-                    i, cell->qtree_code.code_string, cell->lat, cell->lon);
-        }
-    }
-    
-    fprintf(stderr, "================================\n");
-    
-    free(grid_coverage_count);
+    fprintf(stderr, "================================\n\n");
 }
 
 /* 四叉树编码实现 */
@@ -807,12 +1191,55 @@ int quadtree_codes_are_neighbors(const QuadtreeCode *code1, const QuadtreeCode *
     return 0;
 }
 
+/* 经纬度编码实现 */
+
+/*
+ * latlon_code_to_string
+ * 将经纬度编码转换为字符串格式
+ */
+void latlon_code_to_string(const LatLonCode *code, char *output) {
+    if (!code || !output) return;
+    snprintf(output, 64, "LAT%03d_LON%03d", code->lat_idx, code->lon_idx);
+}
+
+/*
+ * latlon_string_to_code
+ * 将字符串格式的编码转换为LatLonCode结构
+ */
+int latlon_string_to_code(const char *code_string, LatLonCode *code) {
+    if (!code_string || !code) return 0;
+    
+    // 解析格式: "LAT###_LON###"
+    if (strncmp(code_string, "LAT", 3) != 0) return 0;
+    
+    // 提取纬度索引和经度索引
+    int lat_idx, lon_idx;
+    if (sscanf(code_string, "LAT%d_LON%d", &lat_idx, &lon_idx) != 2) {
+        return 0;
+    }
+    
+    code->lat_idx = lat_idx;
+    code->lon_idx = lon_idx;
+    strncpy(code->code_string, code_string, 63);
+    code->code_string[63] = '\0';
+    
+    return 1;
+}
+
+/*
+ * grid_coverage_get_type
+ * 获取当前格网类型
+ */
+GridType grid_coverage_get_type(void) {
+    return grid_coverage.grid_type;
+}
+
 
 /* TCL命令接口 */
 
 /*
  * grid_coverage_on_cmd
- * 启用格网覆盖计算
+ * 启用格网覆盖计算（二十面体格网）
  */
 char *grid_coverage_on_cmd(int argc, char *argv[]) {
     int level = 2; // 默认级别
@@ -826,19 +1253,199 @@ char *grid_coverage_on_cmd(int argc, char *argv[]) {
         }
     }
     
-    // 如果级别不同，需要重新初始化
-    if (grid_coverage.cells && grid_coverage.grid_level != level) {
+    // 如果级别不同或格网类型不同，需要重新初始化
+    if (grid_coverage.ico_cells && 
+        (grid_coverage.grid_level != level || grid_coverage.grid_type != GRID_TYPE_ICOSAHEDRAL)) {
         grid_coverage_cleanup();
     }
     
-    if (!grid_coverage.cells) {
+    if (!grid_coverage.ico_cells) {
         if (!grid_coverage_init(level)) {
             return "Failed to initialize grid coverage";
         }
     }
     
     grid_coverage_enabled = 1;
-    fprintf(stderr, "Grid coverage enabled (level %d, %d cells)\n", level, grid_coverage.cell_count);
+    fprintf(stderr, "Grid coverage enabled (Icosahedral, level %d, %d cells)\n", 
+            level, grid_coverage.ico_cell_count);
+    
+    // 初始化Socket连接
+    grid_coverage_socket_init();
+    
+    // 立即进行一次覆盖计算
+    Constellation *constellation = get_constellation();
+    if (constellation && constellation->satellites && constellation->pcb) {
+        grid_coverage_compute(constellation->satellites, constellation->pcb);
+    }
+    
+    return "OK";
+}
+
+/*
+ * grid_coverage_on_latlon_cmd
+ * 启用格网覆盖计算（经纬度格网）
+ */
+char *grid_coverage_on_latlon_cmd(int argc, char *argv[]) {
+    int lat_divisions = 18; // 默认纬度划分数
+    int lon_divisions = 36; // 默认经度划分数
+    
+    // 从参数中获取划分数 (argv[2] 是纬度划分, argv[3] 是经度划分)
+    if (argc >= 3) {
+        lat_divisions = atoi(argv[2]);
+        if (lat_divisions < 1 || lat_divisions > 180) {
+            fprintf(stderr, "Invalid lat_divisions %d, using default 18\n", lat_divisions);
+            lat_divisions = 18;
+        }
+    }
+    
+    if (argc >= 4) {
+        lon_divisions = atoi(argv[3]);
+        if (lon_divisions < 1 || lon_divisions > 360) {
+            fprintf(stderr, "Invalid lon_divisions %d, using default 36\n", lon_divisions);
+            lon_divisions = 36;
+        }
+    }
+    
+    // 如果划分数不同或格网类型不同，需要重新初始化
+    if (grid_coverage.latlon_cells && 
+        (grid_coverage.lat_divisions != lat_divisions || 
+         grid_coverage.lon_divisions != lon_divisions ||
+         grid_coverage.grid_type != GRID_TYPE_LATLON)) {
+        grid_coverage_cleanup();
+    }
+    
+    if (!grid_coverage.latlon_cells) {
+        if (!grid_coverage_init_latlon(lat_divisions, lon_divisions)) {
+            return "Failed to initialize latlon grid coverage";
+        }
+    }
+    
+    grid_coverage_enabled = 1;
+    fprintf(stderr, "Grid coverage enabled (LatLon, %dx%d, %d cells)\n", 
+            lat_divisions, lon_divisions, grid_coverage.latlon_cell_count);
+    
+    // 初始化Socket连接
+    grid_coverage_socket_init();
+    
+    // 立即进行一次覆盖计算
+    Constellation *constellation = get_constellation();
+    if (constellation && constellation->satellites && constellation->pcb) {
+        grid_coverage_compute(constellation->satellites, constellation->pcb);
+    }
+    
+    return "OK";
+}
+
+/*
+ * grid_coverage_on_both_cmd
+ * 同时启用两种格网类型（二十面体+经纬度）
+ */
+char *grid_coverage_on_both_cmd(int argc, char *argv[]) {
+    int ico_level = 2;           // 默认二十面体级别
+    int lat_divisions = 18;      // 默认纬度划分数
+    int lon_divisions = 36;      // 默认经度划分数
+    
+    // 解析参数
+    if (argc >= 3) {
+        ico_level = atoi(argv[2]);
+        if (ico_level < 0 || ico_level > 6) {
+            fprintf(stderr, "Invalid grid level %d, using default level 2\n", ico_level);
+            ico_level = 2;
+        }
+    }
+    
+    if (argc >= 4) {
+        lat_divisions = atoi(argv[3]);
+        if (lat_divisions < 1 || lat_divisions > 180) {
+            fprintf(stderr, "Invalid lat_divisions %d, using default 18\n", lat_divisions);
+            lat_divisions = 18;
+        }
+    }
+    
+    if (argc >= 5) {
+        lon_divisions = atoi(argv[4]);
+        if (lon_divisions < 1 || lon_divisions > 360) {
+            fprintf(stderr, "Invalid lon_divisions %d, using default 36\n", lon_divisions);
+            lon_divisions = 36;
+        }
+    }
+    
+    fprintf(stderr, "\n=== Initializing BOTH grid types ===\n");
+    fprintf(stderr, "Icosahedral: level %d\n", ico_level);
+    fprintf(stderr, "Lat-Lon: %dx%d\n", lat_divisions, lon_divisions);
+    
+    // 清理旧数据
+    grid_coverage_cleanup();
+    
+    // 设置both模式
+    grid_coverage.both_mode = 1;
+    grid_coverage.grid_level = ico_level;
+    grid_coverage.lat_divisions = lat_divisions;
+    grid_coverage.lon_divisions = lon_divisions;
+    grid_coverage.coverage_angle = DEFAULT_COVERAGE_ANGLE_DEG * DEG_TO_RAD;
+    
+    // 步骤1: 加载二十面体格网到独立数组
+    fprintf(stderr, "\nStep 1: Loading icosahedral grid...\n");
+    
+    // 估算格网单元数量
+    int estimated_ico_cells = 20;
+    for (int i = 0; i < ico_level; i++) {
+        estimated_ico_cells *= 4;
+    }
+    estimated_ico_cells += 100;
+    
+    grid_coverage.max_ico_cells = estimated_ico_cells;
+    grid_coverage.ico_cells = malloc(grid_coverage.max_ico_cells * sizeof(GridCell));
+    
+    if (!grid_coverage.ico_cells) {
+        grid_coverage.both_mode = 0;
+        return "Failed to allocate memory for icosahedral grid";
+    }
+    
+    // 直接加载二十面体格网（使用ico_cells）
+    if (!grid_coverage_load_from_file(ico_level)) {
+        fprintf(stderr, "Failed to load icosahedral grid file\n");
+        free(grid_coverage.ico_cells);
+        grid_coverage.ico_cells = NULL;
+        grid_coverage.both_mode = 0;
+        return "Failed to load icosahedral grid";
+    }
+    
+    fprintf(stderr, "Icosahedral grid loaded: %d cells\n", grid_coverage.ico_cell_count);
+    
+    // 步骤2: 加载经纬度格网到独立数组
+    fprintf(stderr, "\nStep 2: Loading lat-lon grid...\n");
+    
+    int estimated_latlon_cells = lat_divisions * lon_divisions * 2 + 100;
+    grid_coverage.max_latlon_cells = estimated_latlon_cells;
+    grid_coverage.latlon_cells = malloc(grid_coverage.max_latlon_cells * sizeof(GridCell));
+    
+    if (!grid_coverage.latlon_cells) {
+        free(grid_coverage.ico_cells);
+        grid_coverage.ico_cells = NULL;
+        grid_coverage.both_mode = 0;
+        return "Failed to allocate memory for lat-lon grid";
+    }
+    
+    // 直接加载经纬度格网（使用latlon_cells）
+    if (!grid_coverage_load_latlon_from_file(lat_divisions, lon_divisions)) {
+        fprintf(stderr, "Failed to load lat-lon grid file\n");
+        free(grid_coverage.ico_cells);
+        free(grid_coverage.latlon_cells);
+        grid_coverage.ico_cells = NULL;
+        grid_coverage.latlon_cells = NULL;
+        grid_coverage.both_mode = 0;
+        return "Failed to load lat-lon grid";
+    }
+    
+    fprintf(stderr, "Lat-lon grid loaded: %d cells\n", grid_coverage.latlon_cell_count);
+    
+    grid_coverage_enabled = 1;
+    
+    fprintf(stderr, "\n=== Both grids enabled successfully ===\n");
+    fprintf(stderr, "Icosahedral: %d cells\n", grid_coverage.ico_cell_count);
+    fprintf(stderr, "Lat-Lon: %d cells\n", grid_coverage.latlon_cell_count);
+    fprintf(stderr, "Both grid types will be sent simultaneously\n\n");
     
     // 初始化Socket连接
     grid_coverage_socket_init();
@@ -859,6 +1466,7 @@ char *grid_coverage_on_cmd(int argc, char *argv[]) {
 char *grid_coverage_off_cmd(int argc, char *argv[]) {
     grid_coverage_enabled = 0;
     grid_coverage_socket_cleanup();
+    grid_coverage.both_mode = 0;  // 重置both_mode标志
     fprintf(stderr, "Grid coverage calculation disabled\n");
     return "OK";
 }
@@ -892,7 +1500,7 @@ char *grid_coverage_stats_cmd(int argc, char *argv[]) {
 
 /*
  * grid_coverage_query_code_cmd
- * 查询四叉树编码命令
+ * 查询格网编码命令
  */
 char *grid_coverage_query_code_cmd(int argc, char *argv[]) {
     if (argc < 3) {
@@ -900,35 +1508,55 @@ char *grid_coverage_query_code_cmd(int argc, char *argv[]) {
     }
     
     int grid_id = atoi(argv[2]);
-    if (grid_id < 0 || grid_id >= grid_coverage.cell_count) {
-        return "Invalid grid ID";
+    GridCell *cell = NULL;
+    
+    // 根据当前模式查询
+    if (grid_coverage.grid_type == GRID_TYPE_ICOSAHEDRAL) {
+        if (grid_id < 0 || grid_id >= grid_coverage.ico_cell_count) {
+            return "Invalid grid ID for icosahedral grid";
+        }
+        cell = &grid_coverage.ico_cells[grid_id];
+    } else if (grid_coverage.grid_type == GRID_TYPE_LATLON) {
+        if (grid_id < 0 || grid_id >= grid_coverage.latlon_cell_count) {
+            return "Invalid grid ID for lat-lon grid";
+        }
+        cell = &grid_coverage.latlon_cells[grid_id];
+    } else {
+        return "Grid not initialized";
     }
     
-    GridCell *cell = &grid_coverage.cells[grid_id];
-    
-    fprintf(stderr, "Grid %d quadtree information:\n", grid_id);
-    fprintf(stderr, "  Code: %s\n", cell->qtree_code.code_string);
-    fprintf(stderr, "  Base face: %d\n", cell->qtree_code.base_face_id);
-    fprintf(stderr, "  Level: %d\n", cell->qtree_code.level);
-    fprintf(stderr, "  Path code: 0x%x\n", cell->qtree_code.path_code);
+    fprintf(stderr, "Grid %d information:\n", grid_id);
+    fprintf(stderr, "  Type: %s\n", 
+            cell->grid_type == GRID_TYPE_ICOSAHEDRAL ? "Icosahedral" : "Lat-Lon");
     fprintf(stderr, "  Position: (%.2f°, %.2f°)\n", cell->lat, cell->lon);
     
-    // 显示父节点信息
-    if (cell->qtree_code.level > 0) {
-        QuadtreeCode parent;
-        if (quadtree_get_parent_code(&cell->qtree_code, &parent)) {
-            fprintf(stderr, "  Parent: %s\n", parent.code_string);
+    if (cell->grid_type == GRID_TYPE_ICOSAHEDRAL) {
+        fprintf(stderr, "  Quadtree code: %s\n", cell->qtree_code.code_string);
+        fprintf(stderr, "  Base face: %d\n", cell->qtree_code.base_face_id);
+        fprintf(stderr, "  Level: %d\n", cell->qtree_code.level);
+        fprintf(stderr, "  Path code: 0x%x\n", cell->qtree_code.path_code);
+        
+        // 显示父节点信息
+        if (cell->qtree_code.level > 0) {
+            QuadtreeCode parent;
+            if (quadtree_get_parent_code(&cell->qtree_code, &parent)) {
+                fprintf(stderr, "  Parent: %s\n", parent.code_string);
+            }
         }
-    }
-    
-    // 显示子节点信息
-    if (cell->qtree_code.level < MAX_QUADTREE_DEPTH) {
-        QuadtreeCode children[4];
-        if (quadtree_get_children_codes(&cell->qtree_code, children)) {
-            fprintf(stderr, "  Children: %s, %s, %s, %s\n", 
-                    children[0].code_string, children[1].code_string,
-                    children[2].code_string, children[3].code_string);
+        
+        // 显示子节点信息
+        if (cell->qtree_code.level < MAX_QUADTREE_DEPTH) {
+            QuadtreeCode children[4];
+            if (quadtree_get_children_codes(&cell->qtree_code, children)) {
+                fprintf(stderr, "  Children: %s, %s, %s, %s\n", 
+                        children[0].code_string, children[1].code_string,
+                        children[2].code_string, children[3].code_string);
+            }
         }
+    } else {
+        fprintf(stderr, "  Lat-Lon code: %s\n", cell->latlon_code.code_string);
+        fprintf(stderr, "  Lat index: %d\n", cell->latlon_code.lat_idx);
+        fprintf(stderr, "  Lon index: %d\n", cell->latlon_code.lon_idx);
     }
     
     return "OK";
@@ -969,53 +1597,107 @@ void grid_coverage_socket_cleanup(void) {
  * 发送卫星覆盖数据到Socket
  */
 void grid_coverage_socket_send_data(void) {
-    printf("DEBUG: grid_coverage_socket_send_data called\n");
-    printf("DEBUG: socket_fd=%d, grid_coverage_enabled=%d, satellite_coverages=%p\n", 
-           socket_fd, grid_coverage_enabled, grid_coverage.satellite_coverages);
-    printf("DEBUG: satellite_count=%d\n", grid_coverage.satellite_count);
-    
     if (socket_fd < 0 || !grid_coverage_enabled || !grid_coverage.satellite_coverages) {
-        printf("DEBUG: Early return - socket not ready or no data\n");
         return;
     }
     
     // 为每个卫星发送覆盖数据
-    printf("DEBUG: Processing %d satellites\n", grid_coverage.satellite_count);
     for (int i = 0; i < grid_coverage.satellite_count; i++) {
         SatelliteCoverage *sat_cov = &grid_coverage.satellite_coverages[i];
-        printf("DEBUG: Satellite %d has %d covered grids\n", sat_cov->satellite_id, sat_cov->coverage_count);
-        if (sat_cov->coverage_count > 0) {
-            char buffer[4096];
-            int pos = 0;
-            
-            // 格式: "SAT_ID:code1,code2,code3,...\n" (使用四叉树编码)
-            pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%d:", sat_cov->satellite_id);
-            
-            for (int j = 0; j < sat_cov->coverage_count && pos < sizeof(buffer) - 50; j++) {
-                if (j > 0) {
-                    pos += snprintf(buffer + pos, sizeof(buffer) - pos, ",");
-                }
+        
+        // Both模式：分别发送两种格网的覆盖数据
+        if (grid_coverage.both_mode) {
+            // 发送二十面体格网覆盖
+            if (sat_cov->ico_coverage_count > 0) {
+                char buffer[8192];
+                int pos = 0;
                 
-                // 获取格网的四叉树编码
-                int grid_id = sat_cov->covered_grids[j];
-                if (grid_id >= 0 && grid_id < grid_coverage.cell_count) {
-                    GridCell *cell = &grid_coverage.cells[grid_id];
-                    pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%s", 
-                                  cell->qtree_code.code_string);
-                } else {
-                    // 如果格网ID无效，使用格网ID作为后备
-                    pos += snprintf(buffer + pos, sizeof(buffer) - pos, "INVALID_%d", grid_id);
+                pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%d:", sat_cov->satellite_id);
+                
+                for (int j = 0; j < sat_cov->ico_coverage_count && pos < sizeof(buffer) - 64; j++) {
+                    if (j > 0) {
+                        pos += snprintf(buffer + pos, sizeof(buffer) - pos, ",");
+                    }
+                    
+                    int grid_idx = sat_cov->covered_ico_grids[j];
+                    if (grid_idx >= 0 && grid_idx < grid_coverage.ico_cell_count) {
+                        GridCell *cell = &grid_coverage.ico_cells[grid_idx];
+                        pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%s", 
+                                      cell->qtree_code.code_string);
+                    }
                 }
+                pos += snprintf(buffer + pos, sizeof(buffer) - pos, "\n");
+                
+                sendto(socket_fd, buffer, pos, 0, (struct sockaddr*)&server_addr, sizeof(server_addr));
             }
-            pos += snprintf(buffer + pos, sizeof(buffer) - pos, "\n");
             
-            // 发送数据到Unix socket
-            printf("DEBUG: Sending data for satellite %d: %.*s", sat_cov->satellite_id, pos-1, buffer);
-            int sent = sendto(socket_fd, buffer, pos, 0, (struct sockaddr*)&server_addr, sizeof(server_addr));
-            if (sent < 0) {
-                printf("Failed to send grid coverage data to Unix socket: %s\n", strerror(errno));
-            } else {
-                printf("DEBUG: Successfully sent %d bytes to Unix socket\n", sent);
+            // 发送经纬度格网覆盖
+            if (sat_cov->latlon_coverage_count > 0) {
+                char buffer[8192];
+                int pos = 0;
+                
+                pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%d:", sat_cov->satellite_id);
+                
+                for (int j = 0; j < sat_cov->latlon_coverage_count && pos < sizeof(buffer) - 64; j++) {
+                    if (j > 0) {
+                        pos += snprintf(buffer + pos, sizeof(buffer) - pos, ",");
+                    }
+                    
+                    int grid_idx = sat_cov->covered_latlon_grids[j];
+                    if (grid_idx >= 0 && grid_idx < grid_coverage.latlon_cell_count) {
+                        GridCell *cell = &grid_coverage.latlon_cells[grid_idx];
+                        pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%s", 
+                                      cell->latlon_code.code_string);
+                    }
+                }
+                pos += snprintf(buffer + pos, sizeof(buffer) - pos, "\n");
+                
+                sendto(socket_fd, buffer, pos, 0, (struct sockaddr*)&server_addr, sizeof(server_addr));
+            }
+        } else {
+            // 单格网模式：根据grid_type判断使用哪个数组
+            if (grid_coverage.grid_type == GRID_TYPE_ICOSAHEDRAL && sat_cov->ico_coverage_count > 0) {
+                char buffer[8192];
+                int pos = 0;
+                
+                pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%d:", sat_cov->satellite_id);
+                
+                for (int j = 0; j < sat_cov->ico_coverage_count && pos < sizeof(buffer) - 64; j++) {
+                    if (j > 0) {
+                        pos += snprintf(buffer + pos, sizeof(buffer) - pos, ",");
+                    }
+                    
+                    int grid_idx = sat_cov->covered_ico_grids[j];
+                    if (grid_idx >= 0 && grid_idx < grid_coverage.ico_cell_count) {
+                        GridCell *cell = &grid_coverage.ico_cells[grid_idx];
+                        pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%s", 
+                                      cell->qtree_code.code_string);
+                    }
+                }
+                pos += snprintf(buffer + pos, sizeof(buffer) - pos, "\n");
+                
+                sendto(socket_fd, buffer, pos, 0, (struct sockaddr*)&server_addr, sizeof(server_addr));
+            } else if (grid_coverage.grid_type == GRID_TYPE_LATLON && sat_cov->latlon_coverage_count > 0) {
+                char buffer[8192];
+                int pos = 0;
+                
+                pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%d:", sat_cov->satellite_id);
+                
+                for (int j = 0; j < sat_cov->latlon_coverage_count && pos < sizeof(buffer) - 64; j++) {
+                    if (j > 0) {
+                        pos += snprintf(buffer + pos, sizeof(buffer) - pos, ",");
+                    }
+                    
+                    int grid_idx = sat_cov->covered_latlon_grids[j];
+                    if (grid_idx >= 0 && grid_idx < grid_coverage.latlon_cell_count) {
+                        GridCell *cell = &grid_coverage.latlon_cells[grid_idx];
+                        pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%s", 
+                                      cell->latlon_code.code_string);
+                    }
+                }
+                pos += snprintf(buffer + pos, sizeof(buffer) - pos, "\n");
+                
+                sendto(socket_fd, buffer, pos, 0, (struct sockaddr*)&server_addr, sizeof(server_addr));
             }
         }
     }
