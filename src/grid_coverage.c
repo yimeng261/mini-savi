@@ -257,7 +257,7 @@ int grid_coverage_load_from_file(int level) {
     
     // 构建文件路径
     snprintf(base_filename, sizeof(base_filename), "icosahedral_grid_level_%d", level);
-    snprintf(filename, sizeof(filename), "./mini-savi/%s.oogl", base_filename);
+    snprintf(filename, sizeof(filename), "./generated/grids/%s.oogl", base_filename);
     fprintf(stderr, "Attempting to load grid file: %s\n", filename);
     
     fp = fopen(filename, "r");
@@ -414,7 +414,7 @@ int grid_coverage_load_latlon_from_file(int lat_divisions, int lon_divisions) {
     // 构建文件路径
     snprintf(base_filename, sizeof(base_filename), "latlon_grid_%dx%d",
              lat_divisions, lon_divisions);
-    snprintf(filename, sizeof(filename), "./mini-savi/%s.oogl", 
+    snprintf(filename, sizeof(filename), "./generated/grids/%s.oogl", 
              base_filename);
     fprintf(stderr, "Attempting to load latlon grid file: %s\n", filename);
     
@@ -791,7 +791,7 @@ grid_coverage_validate_ico_metadata(const char *base_filename, int level,
     char metadata_path[256];
     GridMetadata metadata;
 
-    snprintf(metadata_path, sizeof(metadata_path), "./mini-savi/%s.json",
+    snprintf(metadata_path, sizeof(metadata_path), "./generated/grids/%s.json",
              base_filename);
     if (!load_grid_metadata_file(metadata_path, &metadata)) {
         fprintf(stderr, "Grid metadata missing for %s, continuing without validation\n",
@@ -817,7 +817,7 @@ grid_coverage_validate_latlon_metadata(const char *base_filename,
     char metadata_path[256];
     GridMetadata metadata;
 
-    snprintf(metadata_path, sizeof(metadata_path), "./mini-savi/%s.json",
+    snprintf(metadata_path, sizeof(metadata_path), "./generated/grids/%s.json",
              base_filename);
     if (!load_grid_metadata_file(metadata_path, &metadata)) {
         fprintf(stderr, "Grid metadata missing for %s, continuing without validation\n",

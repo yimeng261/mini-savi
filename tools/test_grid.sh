@@ -1,42 +1,43 @@
 #!/bin/bash
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
 
 echo "=== SaVi 格网可视化测试 ==="
 
 echo "1. 生成格网文件..."
 
-cd /home/dreamcat/Desktop/mini-savi
-rm -f ./mini-savi/*.oogl
+rm -f ./generated/grids/*.oogl ./generated/grids/*.json
 
 # 生成二十面体格网
 echo "生成二十面体格网 (level 1)..."
-echo "1" | ./grid_calc
+echo "1" | ./tools/grid_calc
 echo "生成二十面体格网 (level 2)..."
-echo "2" | ./grid_calc
+echo "2" | ./tools/grid_calc
 echo "生成二十面体格网 (level 3)..."
-echo "3" | ./grid_calc
+echo "3" | ./tools/grid_calc
 echo "生成二十面体格网 (level 4)..."
-echo "4" | ./grid_calc
+echo "4" | ./tools/grid_calc
 echo "生成二十面体格网 (level 5)..."
-echo "5" | ./grid_calc
+echo "5" | ./tools/grid_calc
 
 # 生成经纬度格网
 echo "生成经纬度格网 (36x72)..."
-if [ -f ./latlon_grid_calc ]; then
-    echo -e "36\n72" | ./latlon_grid_calc
+if [ -f ./tools/latlon_grid_calc ]; then
+    echo -e "36\n72" | ./tools/latlon_grid_calc
 else
     echo "编译 latlon_grid_calc..."
-    gcc -o latlon_grid_calc latlon_grid_calc.c -lm
-    echo -e "36\n72" | ./latlon_grid_calc
+    gcc -o tools/latlon_grid_calc tools/latlon_grid_calc.c -lm
+    echo -e "36\n72" | ./tools/latlon_grid_calc
 fi
 
 echo "生成的格网文件："
-ls -la mini-savi/*.oogl
+ls -la generated/grids/*.oogl
 
 
 
 echo "启动 router-host.py 服务..."
-# python3 router-host.py & ROUTER_PID=$!
+# python3 scripts/router-host.py & ROUTER_PID=$!
 
 sleep 1  # 等待服务启动
 

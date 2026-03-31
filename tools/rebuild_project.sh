@@ -33,6 +33,9 @@ info_msg() {
     echo -e "${BLUE}ℹ $1${NC}"
 }
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
 # 检查是否在正确的目录
 if [[ ! -f "savi" ]] || [[ ! -d "src" ]] || [[ ! -d "tcl" ]]; then
     error_exit "请在 mini-savi 项目根目录下运行此脚本"
@@ -53,7 +56,7 @@ fi
 # 步骤2: 重新编译格网计算程序
 echo ""
 echo "2. 编译格网计算程序..."
-if gcc -o grid_calc grid_calc.c -lm; then
+if gcc -o tools/grid_calc tools/grid_calc.c -lm; then
     success_msg "格网计算程序编译完成"
 else
     error_exit "格网计算程序编译失败"
@@ -64,12 +67,12 @@ echo ""
 echo "3. 生成格网文件..."
 
 # 创建输出目录
-mkdir -p mini-savi
+mkdir -p generated/grids
 
 # 生成不同级别的格网
 for level in 0 1 2; do
     info_msg "生成 $level 级格网..."
-    if echo "$level" | ./grid_calc > /dev/null 2>&1; then
+    if echo "$level" | ./tools/grid_calc > /dev/null 2>&1; then
         success_msg "$level 级格网生成完成"
     else
         warning_msg "$level 级格网生成失败，但继续构建"
@@ -114,12 +117,12 @@ echo "6. 验证构建结果..."
 # 检查关键文件
 files_to_check=(
     "./savi"
-    "./grid_calc"
+    "./tools/grid_calc"
     "./tcl/grid.tcl"
     "./tcl/tclIndex"
-    "./mini-savi/icosahedral_grid_level_0.oogl"
-    "./mini-savi/icosahedral_grid_level_1.oogl"
-    "./mini-savi/icosahedral_grid_level_2.oogl"
+    "./generated/grids/icosahedral_grid_level_0.oogl"
+    "./generated/grids/icosahedral_grid_level_1.oogl"
+    "./generated/grids/icosahedral_grid_level_2.oogl"
 )
 
 all_files_ok=true
@@ -182,21 +185,21 @@ echo "======================================"
 echo ""
 info_msg "创建快速测试脚本..."
 
-cat > quick_test.sh << 'EOF'
+cat > tools/quick_test.sh << 'EOF'
 #!/bin/bash
 echo "快速格网测试..."
 echo "检查格网文件:"
-ls -la mini-savi/icosahedral_grid_level_*.oogl
+ls -la generated/grids/icosahedral_grid_level_*.oogl
 echo ""
 echo "检查坐标范围（应该在6000-7000km范围内）:"
-head -15 mini-savi/icosahedral_grid_level_0.oogl | tail -5
+head -15 generated/grids/icosahedral_grid_level_0.oogl | tail -5
 echo ""
 echo "启动SaVi进行测试:"
 echo "geomview -run ./savi"
 EOF
 
-chmod +x quick_test.sh
-success_msg "创建了 quick_test.sh 快速测试脚本"
+chmod +x tools/quick_test.sh
+success_msg "创建了 tools/quick_test.sh 快速测试脚本"
 
 echo ""
 success_msg "重构建脚本执行完成！"

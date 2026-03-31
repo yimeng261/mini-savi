@@ -58,7 +58,15 @@ src/version.c
 tcl/mkindex.tcl
 tcl/tclIndex
 
-*.png
-*.pkl
-*.json
 __pycache__/
+
+outputs/*
+!outputs/.gitkeep
+outputs/plots/*
+!outputs/plots/.gitkeep
+outputs/experiments/*
+!outputs/experiments/.gitkeep
+outputs/runtime/*
+!outputs/runtime/.gitkeep
+
+tools/quick_test.sh

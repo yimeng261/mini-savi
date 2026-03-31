@@ -219,8 +219,8 @@ proc latlon_grid(generate) {lat_div lon_div} {
     global latlon_solid_file latlon_wireframe_file
     
     # 检查文件是否已存在
-    set solid_path "./mini-savi/latlon_grid_${lat_div}x${lon_div}.oogl"
-    set wireframe_path "./mini-savi/latlon_grid_${lat_div}x${lon_div}_wireframe.oogl"
+    set solid_path "./generated/grids/latlon_grid_${lat_div}x${lon_div}.oogl"
+    set wireframe_path "./generated/grids/latlon_grid_${lat_div}x${lon_div}_wireframe.oogl"
     
     if {[file exists $solid_path] && [file exists $wireframe_path]} {
         set latlon_solid_file $solid_path
@@ -261,15 +261,15 @@ proc grid(generate) {level} {
     global grid_solid_file grid_wireframe_file
 
     # 设置文件路径
-    set grid_solid_file "./mini-savi/icosahedral_grid_level_${level}.oogl"
-    set grid_wireframe_file "./mini-savi/icosahedral_grid_level_${level}_wireframe.oogl"
+    set grid_solid_file "./generated/grids/icosahedral_grid_level_${level}.oogl"
+    set grid_wireframe_file "./generated/grids/icosahedral_grid_level_${level}_wireframe.oogl"
 
     # 检查文件是否存在，如果不存在则生成
     if {![file exists $grid_solid_file] || ![file exists $grid_wireframe_file]} {
         puts stderr "SaVi: generating grid level $level..."
         
         # 调用格网生成程序
-        if {[catch {exec echo "$level" | ./grid_calc} result]} {
+        if {[catch {exec echo "$level" | ./tools/grid_calc} result]} {
             puts stderr "SaVi: error generating grid: $result"
             return 0
         }

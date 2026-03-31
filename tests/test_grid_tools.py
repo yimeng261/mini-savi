@@ -26,9 +26,9 @@ class GridToolTests(unittest.TestCase):
         )
 
     def test_grid_calc_cli_and_metadata(self):
-        self.run_cmd(["gcc", "-o", "grid_calc", "grid_calc.c", "-lm"])
+        self.run_cmd(["gcc", "-o", "tools/grid_calc", "tools/grid_calc.c", "-lm"])
         self.run_cmd(
-            ["./grid_calc", "--level", "1", "--output-dir", str(self.tmpdir)]
+            ["./tools/grid_calc", "--level", "1", "--output-dir", str(self.tmpdir)]
         )
 
         metadata_path = self.tmpdir / "icosahedral_grid_level_1.json"
@@ -41,10 +41,10 @@ class GridToolTests(unittest.TestCase):
         self.assertTrue((self.tmpdir / metadata["wireframe_file"]).exists())
 
     def test_latlon_grid_calc_cli_and_metadata(self):
-        self.run_cmd(["gcc", "-o", "latlon_grid_calc", "latlon_grid_calc.c", "-lm"])
+        self.run_cmd(["gcc", "-o", "tools/latlon_grid_calc", "tools/latlon_grid_calc.c", "-lm"])
         self.run_cmd(
             [
-                "./latlon_grid_calc",
+                "./tools/latlon_grid_calc",
                 "--lat",
                 "18",
                 "--lon",

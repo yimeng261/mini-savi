@@ -8,7 +8,7 @@
 #include <sys/stat.h>
 #include <errno.h>
 
-#define DEFAULT_FILEPATH "./mini-savi/"
+#define DEFAULT_FILEPATH "./generated/grids/"
 
 const char *pos[3]={"top","left","right"};
 char code[100];

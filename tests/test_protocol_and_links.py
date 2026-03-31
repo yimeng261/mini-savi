@@ -1,4 +1,9 @@
 import unittest
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 
 from control_plane_utils import compute_link_state_updates
 from receive_grid_coverage_data import GridCoverageAnalyzer, GridType, process_coverage_message

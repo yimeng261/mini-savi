@@ -16,6 +16,7 @@ import os
 import math
 import subprocess
 import threading
+from pathlib import Path
 
 from control_plane_utils import compute_link_state_updates
 
@@ -36,6 +37,7 @@ TOPOLOGY = {
     "num_planes": 0,
 }
 LINK_STATES = {}
+RUNTIME_OUTPUT_DIR = Path(__file__).resolve().parents[1] / "outputs" / "runtime"
 
 
 class Myserver(socketserver.StreamRequestHandler):
@@ -514,7 +516,8 @@ def myNet(num):
             ret = sats[n * M + m].cmd(sat_cmd4) 
             print(ret)
             time.sleep(0.1)
-    with open('topology.savi', 'w') as f:
+    RUNTIME_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    with open(RUNTIME_OUTPUT_DIR / 'topology.savi', 'w') as f:
         for n in range(num):
             f.write(f'node r{n+1}\n')
         for i in ISLs_origin:

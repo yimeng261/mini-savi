@@ -9,6 +9,6 @@ for ubuntu 18.04 / 22.04
 4. cd mini-savi; make ARCH=linux
 
 # run
-1. cd mini-savi/mini-savi; python3 router-host.py
+1. cd mini-savi; python3 scripts/router-host.py
 2. in another terminal, input: cd mini-savi; geomview -run ./savi
 3. select constellation, for example iridium, and click run

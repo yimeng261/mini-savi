@@ -8,6 +8,7 @@ import os
 import sys
 import pickle
 import argparse
+from pathlib import Path
 from enum import Enum
 from collections import defaultdict
 
@@ -36,6 +37,21 @@ class GridType(Enum):
     """格网类型"""
     ICOSAHEDRAL = "Icosahedral"
     LATLON = "LatLon"
+
+
+DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parents[1] / "outputs" / "plots"
+
+
+def ensure_output_dir(output_dir):
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+
+def build_output_path(output_dir, output_prefix, time_limit_minutes):
+    if time_limit_minutes:
+        filename = f"{output_prefix}_{time_limit_minutes}min.png"
+    else:
+        filename = f"{output_prefix}_full.png"
+    return str(Path(output_dir) / filename)
 
 def load_data(filename):
     """加载数据文件"""
@@ -144,7 +160,8 @@ def calculate_satellite_coverage_counts(data, grid_type_name, time_limit_minutes
     
     return satellites, original_counts, greedy_counts
 
-def plot_grid_coverage_comparison(data, time_limit_minutes=None, output_prefix="coverage_comparison"):
+def plot_grid_coverage_comparison(data, time_limit_minutes=None, output_prefix="coverage_comparison",
+                                  output_dir=DEFAULT_OUTPUT_DIR):
     """生成格网覆盖对比图"""
     print(f"{'='*70}")
     print(f"生成格网覆盖对比图 (time_limit={time_limit_minutes}min)...")
@@ -226,16 +243,14 @@ def plot_grid_coverage_comparison(data, time_limit_minutes=None, output_prefix="
     plt.tight_layout()
     
     # 保存图表
-    if time_limit_minutes:
-        filename = f"{output_prefix}_{time_limit_minutes}min.png"
-    else:
-        filename = f"{output_prefix}_full.png"
-    
+    ensure_output_dir(output_dir)
+    filename = build_output_path(output_dir, output_prefix, time_limit_minutes)
     plt.savefig(filename, dpi=150, bbox_inches='tight')
     print(f"✓ 统计图已保存: {filename}")
     plt.close()
 
-def plot_satellite_coverage_comparison(data, time_limit_minutes=None, output_prefix="satellite_coverage_comparison"):
+def plot_satellite_coverage_comparison(data, time_limit_minutes=None, output_prefix="satellite_coverage_comparison",
+                                       output_dir=DEFAULT_OUTPUT_DIR):
     """生成单星覆盖对比图"""
     print(f"{'='*70}")
     print(f"生成单星覆盖对比图 (time_limit={time_limit_minutes}min)...")
@@ -312,16 +327,15 @@ def plot_satellite_coverage_comparison(data, time_limit_minutes=None, output_pre
     plt.tight_layout()
     
     # 保存图表
-    if time_limit_minutes:
-        filename = f"{output_prefix}_{time_limit_minutes}min.png"
-    else:
-        filename = f"{output_prefix}_full.png"
-    
+    ensure_output_dir(output_dir)
+    filename = build_output_path(output_dir, output_prefix, time_limit_minutes)
     plt.savefig(filename, dpi=150, bbox_inches='tight')
     print(f"✓ 单星覆盖统计图已保存: {filename}")
     plt.close()
 
-def plot_grid_cell_coverage_timeline(data, grid_cells=None, time_limit_minutes=None, output_prefix="grid_cell_coverage_timeline"):
+def plot_grid_cell_coverage_timeline(data, grid_cells=None, time_limit_minutes=None,
+                                     output_prefix="grid_cell_coverage_timeline",
+                                     output_dir=DEFAULT_OUTPUT_DIR):
     """
     生成部分格网单元的卫星覆盖时间线图
     
@@ -491,16 +505,13 @@ def plot_grid_cell_coverage_timeline(data, grid_cells=None, time_limit_minutes=N
     plt.tight_layout()
     
     # 保存图表
-    if time_limit_minutes:
-        filename = f"{output_prefix}_{time_limit_minutes}min.png"
-    else:
-        filename = f"{output_prefix}_full.png"
-    
+    ensure_output_dir(output_dir)
+    filename = build_output_path(output_dir, output_prefix, time_limit_minutes)
     plt.savefig(filename, dpi=150, bbox_inches='tight')
     print(f"✓ 格网单元覆盖时间线图已保存: {filename}")
     plt.close()
 
-def generate_all_plots(data, time_limits=None):
+def generate_all_plots(data, time_limits=None, output_dir=DEFAULT_OUTPUT_DIR):
     """生成所有统计图"""
     print(f"\n{'='*70}")
     print("开始生成统计图表")
@@ -519,30 +530,30 @@ def generate_all_plots(data, time_limits=None):
     # 生成格网覆盖对比图
     print("\n[1/3] 生成格网覆盖对比图...")
     for time_limit in time_limits:
-        plot_grid_coverage_comparison(data, time_limit_minutes=time_limit)
+        plot_grid_coverage_comparison(data, time_limit_minutes=time_limit, output_dir=output_dir)
     
     # 生成单星覆盖对比图
     print("\n[2/3] 生成单星覆盖对比图...")
     for time_limit in time_limits:
-        plot_satellite_coverage_comparison(data, time_limit_minutes=time_limit)
+        plot_satellite_coverage_comparison(data, time_limit_minutes=time_limit, output_dir=output_dir)
     
     # 生成格网单元覆盖时间线图
     print("\n[3/3] 生成格网单元覆盖时间线图...")
     for time_limit in time_limits:
-        plot_grid_cell_coverage_timeline(data, time_limit_minutes=time_limit)
+        plot_grid_cell_coverage_timeline(data, time_limit_minutes=time_limit, output_dir=output_dir)
     
     print(f"\n{'='*70}")
     print("✓ 所有统计图生成完成！")
     print(f"{'='*70}")
     print("\n格网覆盖对比图:")
     for time_limit in time_limits:
-        print(f"  - coverage_comparison_{time_limit}min.png")
+        print(f"  - {Path(output_dir) / f'coverage_comparison_{time_limit}min.png'}")
     print("\n单星覆盖对比图:")
     for time_limit in time_limits:
-        print(f"  - satellite_coverage_comparison_{time_limit}min.png")
+        print(f"  - {Path(output_dir) / f'satellite_coverage_comparison_{time_limit}min.png'}")
     print("\n格网单元覆盖时间线图:")
     for time_limit in time_limits:
-        print(f"  - grid_cell_coverage_timeline_{time_limit}min.png")
+        print(f"  - {Path(output_dir) / f'grid_cell_coverage_timeline_{time_limit}min.png'}")
     print(f"{'='*70}\n")
 
 def main():
@@ -550,6 +561,8 @@ def main():
     parser.add_argument('data_file', help='数据文件路径 (.pkl)')
     parser.add_argument('--time-limits', nargs='+', type=int, 
                         help='时间限制（分钟），例如: --time-limits 100 1440')
+    parser.add_argument('--output-dir', default=str(DEFAULT_OUTPUT_DIR),
+                        help='图表输出目录')
     
     args = parser.parse_args()
     
@@ -561,8 +574,7 @@ def main():
     data = load_data(args.data_file)
     
     # 生成统计图
-    generate_all_plots(data, time_limits=args.time_limits)
+    generate_all_plots(data, time_limits=args.time_limits, output_dir=args.output_dir)
 
 if __name__ == "__main__":
     main()
-

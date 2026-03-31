@@ -8,7 +8,7 @@
 #include <sys/stat.h>
 #include <errno.h>
 
-#define DEFAULT_FILEPATH "./mini-savi/"
+#define DEFAULT_FILEPATH "./generated/grids/"
 
 // 格网编码结构（与经纬度对应）
 typedef struct {

@@ -13,6 +13,7 @@ import time
 import json
 import pickle
 import re
+from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
 from typing import Dict, List, Set, Tuple
@@ -88,6 +89,7 @@ def detect_grid_level(grid_count: int, grid_type: GridType) -> str:
     return "Unknown"
 
 FRAGMENT_RE = re.compile(r"^(?P<sat_id>[^@]+)@(?P<index>\d+)/(?P<total>\d+)$")
+DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parents[1] / "outputs" / "experiments"
 
 
 def process_coverage_message(message: str, analyzer, pending_fragments: Dict[str, Dict]) -> bool:
@@ -426,15 +428,22 @@ class GridCoverageAnalyzer:
         filename = f"ico{ico_level}_ll{latlon_level}_{sat_count}sats.pkl"
         return filename
     
-    def save_data(self, filename=None):
+    def save_data(self, filename=None, output_dir=DEFAULT_OUTPUT_DIR):
         """
         保存数据到文件
         
         Args:
             filename: 指定文件名，如果为None则自动生成
         """
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
         if filename is None:
-            filename = self.generate_filename()
+            filename = output_dir / self.generate_filename()
+        else:
+            filename = Path(filename)
+            if not filename.is_absolute():
+                filename = output_dir / filename
         
         print(f"\n{'='*70}")
         print("保存数据到文件...")
@@ -492,7 +501,7 @@ class GridCoverageAnalyzer:
         print(f"  文件大小: {file_size:.2f} MB")
         
         # 同时生成一个JSON元数据文件（便于查看）
-        meta_filename = filename.replace('.pkl', '_meta.json')
+        meta_filename = filename.with_name(filename.stem + '_meta.json')
         with open(meta_filename, 'w', encoding='utf-8') as f:
             json.dump(data['metadata'], f, indent=2, ensure_ascii=False)
             f.write('\n\n')
@@ -501,7 +510,7 @@ class GridCoverageAnalyzer:
         print(f"✓ 元数据已保存: {meta_filename}")
         print(f"{'='*70}")
         
-        return filename
+        return str(filename)
 
 def receive_grid_coverage_data():
     """主函数：接收数据并保存"""
@@ -547,8 +556,6 @@ def receive_grid_coverage_data():
             if analyzer.real_start_time is None:
                 analyzer.real_start_time = time.time()
             analyzer.real_current_time = time.time()
-            
-            message_count += 1
             
             try:
                 # 解析数据
@@ -606,7 +613,7 @@ def receive_grid_coverage_data():
             print("数据接收完成")
             print(f"{'='*70}")
             print(f"✓ 数据文件: {filename}")
-            print(f"✓ 后续可使用 plot_grid_coverage.py 进行绘图分析")
+            print(f"✓ 后续可使用 scripts/plot_grid_coverage.py 进行绘图分析")
             print(f"{'='*70}\n")
         else:
             print("\n[警告] 未收到任何数据，跳过保存")

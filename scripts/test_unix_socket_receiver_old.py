@@ -12,9 +12,12 @@ import sys
 import time
 import json
 import pickle
+from pathlib import Path
 from collections import defaultdict
 from typing import Dict, List, Set, Tuple
 from enum import Enum
+
+DEFAULT_PLOT_DIR = Path(__file__).resolve().parents[1] / "outputs" / "plots"
 
 class GridType(Enum):
     """格网类型"""
@@ -633,10 +636,11 @@ class GridCoverageAnalyzer:
         plt.tight_layout()
         
         # 保存图表
+        DEFAULT_PLOT_DIR.mkdir(parents=True, exist_ok=True)
         if time_limit_minutes:
-            filename = f"{output_prefix}_{time_limit_minutes}min.png"
+            filename = DEFAULT_PLOT_DIR / f"{output_prefix}_{time_limit_minutes}min.png"
         else:
-            filename = f"{output_prefix}_full.png"
+            filename = DEFAULT_PLOT_DIR / f"{output_prefix}_full.png"
         
         plt.savefig(filename, dpi=150, bbox_inches='tight')
         print(f"✓ 统计图已保存: {filename}")
@@ -725,10 +729,11 @@ class GridCoverageAnalyzer:
         plt.tight_layout()
         
         # 保存图表
+        DEFAULT_PLOT_DIR.mkdir(parents=True, exist_ok=True)
         if time_limit_minutes:
-            filename = f"{output_prefix}_{time_limit_minutes}min.png"
+            filename = DEFAULT_PLOT_DIR / f"{output_prefix}_{time_limit_minutes}min.png"
         else:
-            filename = f"{output_prefix}_full.png"
+            filename = DEFAULT_PLOT_DIR / f"{output_prefix}_full.png"
         
         plt.savefig(filename, dpi=150, bbox_inches='tight')
         print(f"✓ 单星覆盖统计图已保存: {filename}")
@@ -793,11 +798,11 @@ class GridCoverageAnalyzer:
         print("✓ 所有统计图生成完成！")
         print("="*70)
         print("\n格网覆盖对比图:")
-        print(f"  - coverage_comparison_{time_limit_1}min.png")
-        print(f"  - coverage_comparison_{time_limit_2}min.png")
+        print(f"  - {DEFAULT_PLOT_DIR / f'coverage_comparison_{time_limit_1}min.png'}")
+        print(f"  - {DEFAULT_PLOT_DIR / f'coverage_comparison_{time_limit_2}min.png'}")
         print("\n单星覆盖对比图:")
-        print(f"  - satellite_coverage_comparison_{time_limit_1}min.png")
-        print(f"  - satellite_coverage_comparison_{time_limit_2}min.png")
+        print(f"  - {DEFAULT_PLOT_DIR / f'satellite_coverage_comparison_{time_limit_1}min.png'}")
+        print(f"  - {DEFAULT_PLOT_DIR / f'satellite_coverage_comparison_{time_limit_2}min.png'}")
 
 def test_unix_socket_receiver():
     # Unix socket路径

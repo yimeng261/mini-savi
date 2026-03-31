@@ -21,15 +21,15 @@ jobs:
 
       - name: Build Grid Generators
         run: |
-          gcc -o grid_calc grid_calc.c -lm
-          gcc -o latlon_grid_calc latlon_grid_calc.c -lm
+          gcc -o tools/grid_calc tools/grid_calc.c -lm
+          gcc -o tools/latlon_grid_calc tools/latlon_grid_calc.c -lm
 
       - name: Python Syntax Check
         run: |
-          python3 -m py_compile router-host.py
-          python3 -m py_compile receive_grid_coverage_data.py
-          python3 -m py_compile plot_grid_coverage.py
-          python3 -m py_compile control_plane_utils.py
+          python3 -m py_compile scripts/router-host.py
+          python3 -m py_compile scripts/receive_grid_coverage_data.py
+          python3 -m py_compile scripts/plot_grid_coverage.py
+          python3 -m py_compile scripts/control_plane_utils.py
 
       - name: Tcl Syntax Check
         run: |
