@@ -41,6 +41,17 @@ int grid_coverage_enabled = 1;
 static int socket_fd = -1;
 static struct sockaddr_un server_addr;
 #define SOCKET_PATH "/tmp/mini_savi_grid_coverage.sock"
+#define GRID_COVERAGE_MAX_DATAGRAM 60000
+#define GRID_COVERAGE_HEADER_MARGIN 32
+
+static unsigned int grid_coverage_socket_send_payload(const char *buffer,
+                                                      size_t length);
+static unsigned int grid_coverage_socket_send_codes(int satellite_id,
+                                                    const int *grid_indices,
+                                                    int grid_count,
+                                                    const GridCell *cells,
+                                                    int cell_count,
+                                                    unsigned int use_icosahedral);
 
 /*
  * grid_coverage_init
@@ -1567,6 +1578,10 @@ char *grid_coverage_query_code_cmd(int argc, char *argv[]) {
  * 初始化Unix Socket连接
  */
 int grid_coverage_socket_init(void) {
+    if (socket_fd >= 0) {
+        return 1;
+    }
+
     socket_fd = socket(AF_UNIX, SOCK_DGRAM, 0);
     if (socket_fd < 0) {
         fprintf(stderr, "Failed to create Unix socket: %s\n", strerror(errno));
@@ -1592,6 +1607,132 @@ void grid_coverage_socket_cleanup(void) {
     }
 }
 
+static unsigned int
+grid_coverage_socket_send_payload(const char *buffer, size_t length) {
+    ssize_t sent;
+
+    if (!buffer || length == 0 || socket_fd < 0) {
+        return FALSE;
+    }
+
+    sent = sendto(socket_fd, buffer, length, 0,
+                  (struct sockaddr*)&server_addr, sizeof(server_addr));
+    if (sent < 0 || (size_t) sent != length) {
+        fprintf(stderr, "Failed to send grid coverage payload: %s\n",
+                strerror(errno));
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static unsigned int
+grid_coverage_socket_send_codes(int satellite_id,
+                                const int *grid_indices,
+                                int grid_count,
+                                const GridCell *cells,
+                                int cell_count,
+                                unsigned int use_icosahedral) {
+    char buffer[GRID_COVERAGE_MAX_DATAGRAM];
+    size_t max_codes_per_fragment = GRID_COVERAGE_MAX_DATAGRAM -
+                                    GRID_COVERAGE_HEADER_MARGIN - 2;
+    int fragment_count = 1;
+    size_t fragment_usage = 0;
+    int has_valid_codes = FALSE;
+    int grid_pos;
+    int current_fragment;
+
+    for (grid_pos = 0; grid_pos < grid_count; grid_pos++) {
+        int grid_idx = grid_indices[grid_pos];
+        const char *code;
+        size_t code_len;
+        size_t add_len;
+
+        if (grid_idx < 0 || grid_idx >= cell_count) {
+            continue;
+        }
+
+        has_valid_codes = TRUE;
+        code = use_icosahedral ? cells[grid_idx].qtree_code.code_string
+                               : cells[grid_idx].latlon_code.code_string;
+        code_len = strlen(code);
+        add_len = fragment_usage ? code_len + 1 : code_len;
+
+        if (fragment_usage && fragment_usage + add_len > max_codes_per_fragment) {
+            fragment_count++;
+            fragment_usage = code_len;
+        } else {
+            fragment_usage += add_len;
+        }
+    }
+
+    if (!has_valid_codes) {
+        return TRUE;
+    }
+
+    grid_pos = 0;
+    current_fragment = 1;
+    while (grid_pos < grid_count) {
+        int pos;
+        int appended_codes = FALSE;
+
+        if (fragment_count > 1) {
+            pos = snprintf(buffer, sizeof(buffer), "%d@%d/%d:",
+                           satellite_id, current_fragment, fragment_count);
+        } else {
+            pos = snprintf(buffer, sizeof(buffer), "%d:", satellite_id);
+        }
+
+        if (pos < 0 || (size_t) pos >= sizeof(buffer) - 2) {
+            fprintf(stderr, "Failed to build grid coverage message header\n");
+            return FALSE;
+        }
+
+        while (grid_pos < grid_count) {
+            int grid_idx = grid_indices[grid_pos];
+            const char *code;
+            size_t code_len;
+            size_t required_len;
+
+            grid_pos++;
+            if (grid_idx < 0 || grid_idx >= cell_count) {
+                continue;
+            }
+
+            code = use_icosahedral ? cells[grid_idx].qtree_code.code_string
+                                   : cells[grid_idx].latlon_code.code_string;
+            code_len = strlen(code);
+            required_len = code_len + (appended_codes ? 1 : 0) + 1;
+
+            if ((size_t) pos + required_len >= sizeof(buffer)) {
+                grid_pos--;
+                break;
+            }
+
+            if (appended_codes) {
+                buffer[pos++] = ',';
+            }
+            memcpy(buffer + pos, code, code_len);
+            pos += code_len;
+            appended_codes = TRUE;
+        }
+
+        if (!appended_codes) {
+            fprintf(stderr, "Grid coverage fragment had no encodable payload\n");
+            return FALSE;
+        }
+
+        buffer[pos++] = '\n';
+        if (!grid_coverage_socket_send_payload(buffer, (size_t) pos)) {
+            return FALSE;
+        }
+
+        current_fragment++;
+    }
+
+    return TRUE;
+}
+
 /*
  * grid_coverage_socket_send_data
  * 发送卫星覆盖数据到Socket
@@ -1609,95 +1750,51 @@ void grid_coverage_socket_send_data(void) {
         if (grid_coverage.both_mode) {
             // 发送二十面体格网覆盖
             if (sat_cov->ico_coverage_count > 0) {
-                char buffer[8192];
-                int pos = 0;
-                
-                pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%d:", sat_cov->satellite_id);
-                
-                for (int j = 0; j < sat_cov->ico_coverage_count && pos < sizeof(buffer) - 64; j++) {
-                    if (j > 0) {
-                        pos += snprintf(buffer + pos, sizeof(buffer) - pos, ",");
-                    }
-                    
-                    int grid_idx = sat_cov->covered_ico_grids[j];
-                    if (grid_idx >= 0 && grid_idx < grid_coverage.ico_cell_count) {
-                        GridCell *cell = &grid_coverage.ico_cells[grid_idx];
-                        pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%s", 
-                                      cell->qtree_code.code_string);
-                    }
+                if (!grid_coverage_socket_send_codes(
+                        sat_cov->satellite_id,
+                        sat_cov->covered_ico_grids,
+                        sat_cov->ico_coverage_count,
+                        grid_coverage.ico_cells,
+                        grid_coverage.ico_cell_count,
+                        TRUE)) {
+                    return;
                 }
-                pos += snprintf(buffer + pos, sizeof(buffer) - pos, "\n");
-                
-                sendto(socket_fd, buffer, pos, 0, (struct sockaddr*)&server_addr, sizeof(server_addr));
             }
             
             // 发送经纬度格网覆盖
             if (sat_cov->latlon_coverage_count > 0) {
-                char buffer[8192];
-                int pos = 0;
-                
-                pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%d:", sat_cov->satellite_id);
-                
-                for (int j = 0; j < sat_cov->latlon_coverage_count && pos < sizeof(buffer) - 64; j++) {
-                    if (j > 0) {
-                        pos += snprintf(buffer + pos, sizeof(buffer) - pos, ",");
-                    }
-                    
-                    int grid_idx = sat_cov->covered_latlon_grids[j];
-                    if (grid_idx >= 0 && grid_idx < grid_coverage.latlon_cell_count) {
-                        GridCell *cell = &grid_coverage.latlon_cells[grid_idx];
-                        pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%s", 
-                                      cell->latlon_code.code_string);
-                    }
+                if (!grid_coverage_socket_send_codes(
+                        sat_cov->satellite_id,
+                        sat_cov->covered_latlon_grids,
+                        sat_cov->latlon_coverage_count,
+                        grid_coverage.latlon_cells,
+                        grid_coverage.latlon_cell_count,
+                        FALSE)) {
+                    return;
                 }
-                pos += snprintf(buffer + pos, sizeof(buffer) - pos, "\n");
-                
-                sendto(socket_fd, buffer, pos, 0, (struct sockaddr*)&server_addr, sizeof(server_addr));
             }
         } else {
             // 单格网模式：根据grid_type判断使用哪个数组
             if (grid_coverage.grid_type == GRID_TYPE_ICOSAHEDRAL && sat_cov->ico_coverage_count > 0) {
-                char buffer[8192];
-                int pos = 0;
-                
-                pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%d:", sat_cov->satellite_id);
-                
-                for (int j = 0; j < sat_cov->ico_coverage_count && pos < sizeof(buffer) - 64; j++) {
-                    if (j > 0) {
-                        pos += snprintf(buffer + pos, sizeof(buffer) - pos, ",");
-                    }
-                    
-                    int grid_idx = sat_cov->covered_ico_grids[j];
-                    if (grid_idx >= 0 && grid_idx < grid_coverage.ico_cell_count) {
-                        GridCell *cell = &grid_coverage.ico_cells[grid_idx];
-                        pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%s", 
-                                      cell->qtree_code.code_string);
-                    }
+                if (!grid_coverage_socket_send_codes(
+                        sat_cov->satellite_id,
+                        sat_cov->covered_ico_grids,
+                        sat_cov->ico_coverage_count,
+                        grid_coverage.ico_cells,
+                        grid_coverage.ico_cell_count,
+                        TRUE)) {
+                    return;
                 }
-                pos += snprintf(buffer + pos, sizeof(buffer) - pos, "\n");
-                
-                sendto(socket_fd, buffer, pos, 0, (struct sockaddr*)&server_addr, sizeof(server_addr));
             } else if (grid_coverage.grid_type == GRID_TYPE_LATLON && sat_cov->latlon_coverage_count > 0) {
-                char buffer[8192];
-                int pos = 0;
-                
-                pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%d:", sat_cov->satellite_id);
-                
-                for (int j = 0; j < sat_cov->latlon_coverage_count && pos < sizeof(buffer) - 64; j++) {
-                    if (j > 0) {
-                        pos += snprintf(buffer + pos, sizeof(buffer) - pos, ",");
-                    }
-                    
-                    int grid_idx = sat_cov->covered_latlon_grids[j];
-                    if (grid_idx >= 0 && grid_idx < grid_coverage.latlon_cell_count) {
-                        GridCell *cell = &grid_coverage.latlon_cells[grid_idx];
-                        pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%s", 
-                                      cell->latlon_code.code_string);
-                    }
+                if (!grid_coverage_socket_send_codes(
+                        sat_cov->satellite_id,
+                        sat_cov->covered_latlon_grids,
+                        sat_cov->latlon_coverage_count,
+                        grid_coverage.latlon_cells,
+                        grid_coverage.latlon_cell_count,
+                        FALSE)) {
+                    return;
                 }
-                pos += snprintf(buffer + pos, sizeof(buffer) - pos, "\n");
-                
-                sendto(socket_fd, buffer, pos, 0, (struct sockaddr*)&server_addr, sizeof(server_addr));
             }
         }
     }

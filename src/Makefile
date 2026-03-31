@@ -48,6 +48,7 @@ include Makefile_defs_$(ARCH)
 
         SRCS = \
 		main.c \
+		mininet_socket.c \
 		globals.c \
 		satCmd.c \
 		sats.c \
@@ -82,6 +83,7 @@ include Makefile_defs_$(ARCH)
 		$(INCLUDE_DIR)/fisheye.h \
 		$(INCLUDE_DIR)/globals.h \
 		$(INCLUDE_DIR)/gv_utils.h \
+		$(INCLUDE_DIR)/mininet_socket.h \
 		$(INCLUDE_DIR)/orbit_utils.h \
 		$(INCLUDE_DIR)/sats.h \
 		$(INCLUDE_DIR)/savi.h \

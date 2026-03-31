@@ -48,6 +48,7 @@
 #include "savi.h"
 #include "time.h"
 #include "grid_coverage.h"
+#include "mininet_socket.h"
 
 
 unsigned int geomview_flag = FALSE;
@@ -339,44 +340,74 @@ sats_init()
 
 //added by tz
 
-extern int sockfd;
-extern struct sockaddr_un saddr;
-
 void send_sats_coor()
 {
-  static long long inter = 0;
-  char coors[102400] = {0};
-  char temp[1024] = {0};
-  int i = 0;
+  static unsigned long update_counter = 0;
+  size_t payload_len = 0;
+  size_t payload_cap = 0;
+  char *payload = NULL;
+  int offset = 0;
+  Satellite_list sl;
 
-  // Check if socket is connected
-  if (sockfd <= 0) {
-    return; // Skip if socket is not available
+  if (!mininet_socket_is_available()) {
+    return;
   }
 
-  inter = inter++;
-
-  if (inter % 10 != 0) //every 10 update times notify ISL delay update once
+  update_counter++;
+  if (update_counter % 10 != 0) {
     return;
+  }
 
-  //fgets(coors,128,stdin);
-  Satellite_list sl = constellation.satellites;
+  payload_cap = ((constellation.n_sats ? constellation.n_sats : 1) * 96) + 1;
+  payload = (char *) malloc(payload_cap);
+  if (!payload) {
+    error("failed to allocate mininet socket payload buffer.");
+    return;
+  }
+  payload[0] = '\0';
 
+  sl = constellation.satellites;
   while (sl) {
+    int written;
+    size_t remaining;
 
-    //sats_debug_cmd(0,0);
+    if (payload_len + 128 >= payload_cap) {
+      char *grown_payload;
 
-    //"name: id: %d, x: %lf, y: %lf, z: %lf, name: %s, i: %d\r\n",  sl->s->id, sl->s->x_C.x, sl->s->x_C.y, sl->s->x_C.z, sl->s->name,  i
-    sprintf(temp, "%d, %lf, %lf, %lf, %s, %d\r\n",  sl->s->id, sl->s->x_C.x, sl->s->x_C.y, sl->s->x_C.z, sl->s->name, i);
-    strcat(coors, temp);
+      payload_cap *= 2;
+      grown_payload = (char *) realloc(payload, payload_cap);
+      if (!grown_payload) {
+	error("failed to grow mininet socket payload buffer.");
+	free(payload);
+	return;
+      }
+      payload = grown_payload;
+    }
+
+    remaining = payload_cap - payload_len;
+    written = snprintf(payload + payload_len, remaining,
+		       "%d, %lf, %lf, %lf, %s, %d\r\n",
+		       sl->s->id, sl->s->x_C.x, sl->s->x_C.y, sl->s->x_C.z,
+		       sl->s->name, offset);
+    if (written < 0 || (size_t) written >= remaining) {
+      error("failed to serialize mininet satellite coordinates.");
+      free(payload);
+      return;
+    }
+
+    payload_len += (size_t) written;
+    offset += written;
     sl = sl->next;
-    i = i + strlen(temp);
-    memset(temp, 0, sizeof(temp));
- }
+  }
 
-  sendto(sockfd, "ISL info start\r\n", strlen("ISL info start\r\n"), 0, (struct sockaddr*)&saddr, sizeof(saddr));
-  sendto(sockfd, coors, strlen(coors), 0, (struct sockaddr*)&saddr, sizeof(saddr));
-  sendto(sockfd, "ISL info end\r\n", strlen("ISL info end\r\n"), 0, (struct sockaddr*)&saddr, sizeof(saddr));
+  if (!mininet_socket_send("ISL info start\r\n") ||
+      !mininet_socket_send_n(payload, payload_len) ||
+      !mininet_socket_send("ISL info end\r\n")) {
+    free(payload);
+    return;
+  }
+
+  free(payload);
 }
 
 /*

@@ -44,16 +44,10 @@
 #include "savi.h"
 #include "tcl_utils.h"
 #include "gv_utils.h"
+#include "mininet_socket.h"
 
 static unsigned int check_env_vars(void);
 static void decode_cmd_line(int argc, char *argv[]);
-static unsigned int create_socket_mininet(void);
-
-
-/* added by tz for mini-savi*/
-int sockfd = 0;
-struct sockaddr_un saddr;
-#define SOCKET_PATH_MAIN "/tmp/mini_savi_main.sock"
 
 
 int
@@ -109,35 +103,15 @@ main(int argc, char *argv[])
   }
 
   /* loop until exit */
-  if (!create_socket_mininet()) {
+  if (!mininet_socket_init()) {
     error("Running SaVi in standalone mode without mininet integration.");
   }
   while (sats_update() && tk_update());
 
+  mininet_socket_cleanup();
   Tcl_DeleteInterp(interp);
 
   exit(0);
-}
-
-static unsigned int create_socket_mininet(void)
-{
-  sockfd = socket(AF_UNIX, SOCK_DGRAM, 0);
-
-  if( sockfd == -1 )
-  {
-    error("create Unix socket for mininet link info failed! Running in standalone mode.");
-    return FALSE;
-  }
-
-  //struct sockaddr_un saddr;
-  memset(&saddr,0,sizeof(saddr));
-  saddr.sun_family = AF_UNIX;
-  strncpy(saddr.sun_path, SOCKET_PATH_MAIN, sizeof(saddr.sun_path) - 1);
-
-  // Unix socket不需要connect，直接发送数据
-  fprintf(stderr, "Unix socket created for mininet integration (path: %s)\n", SOCKET_PATH_MAIN);
-  
-  return TRUE;
 }
 
 
