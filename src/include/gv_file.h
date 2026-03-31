@@ -28,8 +28,8 @@
 
 #include <stdio.h>
 
-FILE *gv_out;
-FILE *gv_in;
+extern FILE *gv_out;
+extern FILE *gv_in;
 
 #endif
 /* !_GV_FILE_H_ */

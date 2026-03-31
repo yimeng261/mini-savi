@@ -40,7 +40,7 @@
 #include <tk.h>
 #endif
 
-Tcl_Interp *interp; /* Interpreter for this application. */
+extern Tcl_Interp *interp; /* Interpreter for this application. */
 
 unsigned int tcl_init(Tcl_Interp * interpreter);
 unsigned int tk_init(Tcl_Interp * interpreter);

@@ -33,6 +33,8 @@
 
 #include "Satellite.h"
 
+Satellite marker[EQUATORIAL_MARKERS];
+
 /*
  * satellite_create
  *

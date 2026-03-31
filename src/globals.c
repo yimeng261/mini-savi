@@ -30,6 +30,9 @@
 #include "constants.h"
 #include "globals.h"
 
+char cmd[LENGTH_STRING_BUFFER];
+char command_switches[LENGTH_STRING_BUFFER];
+
 /* Is program running as a Geomview module? */
 int geomview_module = FALSE;
 int fake_geomview_module = FALSE;
@@ -80,6 +83,7 @@ unsigned char * unp_foreground = NULL;
 unsigned char * unp_mask_foreground = NULL;
 
 /* presumes default cylindrical projection */
+int coverage_projection = CYLINDRICAL;
 int Longitude_Center_Line = 0;
 int coverage_display_center_longitude = 0;
 
@@ -101,6 +105,9 @@ unsigned int reset = FALSE;
 unsigned int single_step = FALSE;
 
 double direction = 1.0;
+double equatorial_exclusion_angle = 0.0;
+double parallels_angle = 0.0;
+double delta_t = 0.0;
 double coverage_angle = COVERAGE_ANGLE;
 int coverage_type = MASK_ELEVATION;
 int orbit_model = J2;
@@ -111,3 +118,13 @@ unsigned int transforms_needed = 0;
 int Image_Width = 0;
 int Image_Height = 0;
 int Fisheye_Diameter = FISHEYE_DIAMETER;
+
+int DIV0 = 0, DIV1 = 0, DIV2 = 0, DIV3 = 0, DIV4 = 0;
+int DIV5 = 0, DIV6 = 0, DIV7 = 0, DIV8 = 0, DIV9 = 0;
+int DIV10 = 0, DIV11 = 0, DIV12 = 0, DIV13 = 0, DIV14 = 0;
+int DIV15 = 0, DIV16 = 0, DIV17 = 0, DIV18 = 0, DIV19 = 0;
+
+int DEC0 = 0, DEC1 = 0, DEC2 = 0, DEC3 = 0, DEC4 = 0;
+int DEC5 = 0, DEC6 = 0, DEC7 = 0, DEC8 = 0, DEC9 = 0;
+int DEC10 = 0, DEC11 = 0, DEC12 = 0, DEC13 = 0, DEC14 = 0;
+int DEC15 = 0, DEC16 = 0, DEC17 = 0, DEC18 = 0, DEC19 = 0;

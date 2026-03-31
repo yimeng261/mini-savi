@@ -29,6 +29,8 @@
 #include "globals.h"
 #include "tcl_utils.h"
 
+Tcl_Interp *interp = NULL;
+
 static Tk_Window mainWindow;	/* The main window for the application. */
 
 /* we want to bypass Tcl_Eval for speed in some case, so store some cmd info */

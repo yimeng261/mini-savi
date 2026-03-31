@@ -25,7 +25,7 @@ include Makefile_defs_$(ARCH)
 # zlib enables transparent gzip compression of dynamic texture scratchfiles.
 # OTHER_LIBS = -lz should be inserted at end of definitions file.
 
-   GCC_FLAGS = -fcommon -O2 -DNO_ZLIB
+   GCC_FLAGS = -O2 -DNO_ZLIB
 
         LIBS = $(TCL_LIBS) $(OTHER_LIBS) -lm
 

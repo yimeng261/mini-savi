@@ -67,7 +67,7 @@ typedef struct satellite_list {
  * create array of 'marker' static satellites for equatorial ring
  */
 #define EQUATORIAL_MARKERS 1080
-Satellite marker[EQUATORIAL_MARKERS];
+extern Satellite marker[EQUATORIAL_MARKERS];
 
 /*
  * define the constellation struct

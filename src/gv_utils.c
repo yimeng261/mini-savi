@@ -42,6 +42,10 @@
 #include "constants.h"
 #include "globals.h"
 
+unsigned char GV_BINARY_FORMAT_AVAILABLE = 0;
+FILE *gv_out = NULL;
+FILE *gv_in = NULL;
+
 extern void gv_delayed_view_update(void);
 
 static unsigned char GV_LITTLE_ENDIAN = 1;

@@ -198,9 +198,9 @@ typedef struct CompModule {
 } CompModule;
 
 extern ViewModule view_modules[];
-const int N_VIEW_MODULES;
+extern const int N_VIEW_MODULES;
 extern CompModule comp_modules[];
-const int N_COMP_MODULES;
+extern const int N_COMP_MODULES;
 
 /*
  * These are used to provide unique identifiers for modules which

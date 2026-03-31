@@ -467,23 +467,15 @@ write_satellites_geom(const Constellation * pconstellation)
 	  if (use_box_satellite) {
 	      fprintf(gv_out, "{INST transform:trans_%d geom:%s}\n", s->id,
 		    s->tag ? box_special_hname : box_hname);
-        printf("{INST transform:trans_%d geom:%s}\n", s->id,
-		    s->tag ? box_special_hname : box_hname);
 	  } else if (use_planes_satellite) {
 	      fprintf(gv_out, "{INST transform:trans_%d geom:%s}\n", s->id,
-		    s->tag ? planes_special_hname : planes_hname);
-        printf(gv_out, "{INST transform:trans_%d geom:%s}\n", s->id,
 		    s->tag ? planes_special_hname : planes_hname);
 	  } else if (use_sphere_satellite) {
 	      fprintf(gv_out, "{INST transform:trans_%d geom:%s}\n", s->id,
 		    s->tag ? sphere_special_hname : sphere_hname);
-        printf(gv_out, "{INST transform:trans_%d geom:%s}\n", s->id,
-		    s->tag ? sphere_special_hname : sphere_hname);
 	  } else {
 	      /* use fancy satellite */
 	      fprintf(gv_out, "{INST transform:trans_%d geom:%s}\n", s->id,
-		    s->tag ? fancy_special_hname : fancy_hname);
-        printf(gv_out, "{INST transform:trans_%d geom:%s}\n", s->id,
 		    s->tag ? fancy_special_hname : fancy_hname);
 	  }
 	}

@@ -40,7 +40,7 @@
 #define TEST_FOR_GV_BINARY_FORMAT
 #endif
 
-unsigned char GV_BINARY_FORMAT_AVAILABLE;
+extern unsigned char GV_BINARY_FORMAT_AVAILABLE;
 
 unsigned char test_ieee_float(void);
 

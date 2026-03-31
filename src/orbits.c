@@ -123,9 +123,6 @@ orbits_set_cmd(int argc, char *argv[])
   int n = atoi(argv[2]);
   unsigned int flag = atoi(argv[3]);
 
-  //add by tz
-  printf(argv);
-
   s = constellation_search(pconstellation, n);
   if (s) {
     if (flag)
@@ -163,15 +160,12 @@ orbit_write_geom(const Satellite s, const Constellation * pconstellation)
   /* start of gv orbit description */
   fprintf(gv_out, "(read geometry {define orbit_%d {VECT\n1 %d 1\n%d\n1\n\n",
 	  s->id, segment_endpoints, segment_endpoints);
-  printf("(read geometry {define orbit_%d {VECT\n1 %d 1\n%d\n1\n\n",
-	  s->id, segment_endpoints, segment_endpoints);
 
   for (i = 0; i < segment_endpoints; i++) {
     t = i * segment_time;
     oe_time_to_geocentric(&u, t, &(s->oe_t), pcb);
 
     fprintf(gv_out, "%f %f %f\n", u.x / scale, u.y / scale, u.z / scale);
-    printf("%f %f %f\n", u.x / scale, u.y / scale, u.z / scale);
   }
 
   /* These four numbers specify the color (RGBA). */
