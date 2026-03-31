@@ -417,7 +417,6 @@ proc main(update) {} {
     } else {
         puts $chan "constellation import start"
         flush $chan
-        sleep 1
     }
 
     while {[satellites GET $i] != ""} {
@@ -429,7 +428,6 @@ proc main(update) {} {
     if {$chan != ""} {
         puts $chan "constellation import end"
         flush $chan
-        sleep 1
         close $chan
     }
 
@@ -465,9 +463,6 @@ proc main(update_field) {i chan} {
     regsub {\}} $line "" line
     regsub {\{} $line "" line
     regsub {\}} $line "" line
-
-    #add by tz
-    puts "line: $line"
 
     .main.cmd.lb insert $i $line
 

@@ -28,17 +28,52 @@ ISLs = {}
 ISLs_origin = {}
 hosts = {}
 sats = {}
+TOPOLOGY = {
+    "num_sats": 0,
+    "sats_per_plane": 0,
+    "num_planes": 0,
+}
 
 
-class Myserver(socketserver.BaseRequestHandler):
+class Myserver(socketserver.StreamRequestHandler):
     sat_line_str = ''
     sat_coor_line_str = ''
     num = 0
     ISL_delays = {} #星间链路延时，为0表示不可见
 
+    def _parse_satellite_tokens(self, line):
+        tokens = [token for token in line.split(' ') if token]
+        if not tokens:
+            return None
+        if tokens[-1] == 'sunlight':
+            return None
+        return tokens
+
+    def _update_topology(self):
+        global TOPOLOGY
+
+        if self.num <= 0:
+            TOPOLOGY["num_sats"] = 0
+            TOPOLOGY["sats_per_plane"] = 0
+            TOPOLOGY["num_planes"] = 0
+            return
+
+        last_sat = sats_str.get(self.num - 1, {})
+        if len(last_sat) < 10:
+            TOPOLOGY["num_sats"] = self.num
+            TOPOLOGY["sats_per_plane"] = 1
+            TOPOLOGY["num_planes"] = self.num
+            return
+
+        sats_per_plane = int(last_sat[9][0:-1]) + 1
+        num_planes = int(self.num / sats_per_plane) if sats_per_plane else 0
+        TOPOLOGY["num_sats"] = self.num
+        TOPOLOGY["sats_per_plane"] = sats_per_plane
+        TOPOLOGY["num_planes"] = num_planes
 
     def calc_sat_num(self):
         global net
+        sats_str.clear()
 
         print("calc sat num")
         print(self.sat_line_str)
@@ -54,32 +89,29 @@ class Myserver(socketserver.BaseRequestHandler):
                 print("found constellation import end")
                 continue
 
-            arrs = line.split(' ')
-            #print(arrs)
-
-            if(arrs[30] == 'sunlight'): #exclude sunlight
+            tokens = self._parse_satellite_tokens(line)
+            if tokens is None:
                 print("exclude sunlight")
                 continue
             
             sats_str[i] = {}
             j = 0
-            for arr in arrs:
-                if arr != '':
-                    #print(arr)
-                    sats_str[i][j] = arr
-                    j = j + 1
+            for arr in tokens:
+                sats_str[i][j] = arr
+                j = j + 1
             i = i + 1
         print("---------------------sats_str-----------------")
         print(sats_str)
         self.num = i  # 总卫星数目
+        self._update_topology()
         print(i)
         
         myNet(self.num)
-        CLI(net)
 
     def modify_ISL_para(self):
         global ISLs
         global ISLs_origin
+        global TOPOLOGY
 
         #print("enter modify_ISL_para()")
         #print("self.num")
@@ -88,7 +120,11 @@ class Myserver(socketserver.BaseRequestHandler):
         #print(self.ISL_delays)
         #print("---------------print ISLs---------------------")
         #print(ISLs)
-        self.num = 66
+        self.num = TOPOLOGY["num_sats"]
+        sats_per_plane = TOPOLOGY["sats_per_plane"]
+        if self.num <= 0 or sats_per_plane <= 0:
+            return
+
         for i in range(0, self.num):
              for j in range(0, self.num):
                 #print("i=%d, j=%d" % (i, j))
@@ -97,7 +133,7 @@ class Myserver(socketserver.BaseRequestHandler):
                 if ((j in islx_origin.keys()) == False) :
                     continue
                 
-                if(i+11==j)or(i-11==j):
+                if(i + sats_per_plane == j) or (i - sats_per_plane == j):
                     isl = ISLs[i][j]
                     #print(self.ISL_delays)
                     if(self.ISL_delays[i][j] != 0):
@@ -117,6 +153,7 @@ class Myserver(socketserver.BaseRequestHandler):
         c = 300000
         r = 6371.0
         self.ISL_delays = {}
+        sats_per_plane = TOPOLOGY["sats_per_plane"]
         for coor_a in sats_coor_str :
             id_a = int(sats_coor_str[coor_a][0])
             x_a = float(sats_coor_str[coor_a][1])
@@ -138,8 +175,7 @@ class Myserver(socketserver.BaseRequestHandler):
                     continue
                 ##https://www.doc88.com/p-0037157447701.html?r=1
 ##################################################################################判断是否超过60
-                M = 11
-                if (get_latitude(x_a,y_a,z_a)>60 or get_latitude(x_a,y_a,z_a)<-60 or get_latitude(x_b,y_b,z_b)>60 or get_latitude(x_b,y_b,z_b)<-60)and(((id_a-1)//M)!=((id_b-1)//M)):
+                if sats_per_plane > 0 and (get_latitude(x_a,y_a,z_a)>60 or get_latitude(x_a,y_a,z_a)<-60 or get_latitude(x_b,y_b,z_b)>60 or get_latitude(x_b,y_b,z_b)<-60)and(((id_a-1)//sats_per_plane)!=((id_b-1)//sats_per_plane)):
                     self.ISL_delays[id_a-1][id_b-1] = 0
                     #self.ISL_delays[id_b-1][id_a-1] = 0
                     continue
@@ -169,6 +205,7 @@ class Myserver(socketserver.BaseRequestHandler):
 
     def parse_ISL_info(self):
         print("enter parse_ISL_info()")
+        sats_coor_str.clear()
         #print(self.sat_coor_line_str)
         i = 0
         j = 0
@@ -183,8 +220,9 @@ class Myserver(socketserver.BaseRequestHandler):
                 #print("found - ", line)
                 continue
 
-            arrs = line.split(', ')
-            #print("arrs: ", arrs)
+            arrs = [arr for arr in line.split(', ') if arr != '']
+            if len(arrs) < 5:
+                continue
 
             if(arrs[4] == 'sunlight'): #exclude sunlight
                 #print("exclude sunlight")
@@ -193,10 +231,8 @@ class Myserver(socketserver.BaseRequestHandler):
             sats_coor_str[i] = {}
             j = 0
             for arr in arrs:
-                if arr != '':
-                    #print(arr)
-                    sats_coor_str[i][j] = arr
-                    j = j + 1
+                sats_coor_str[i][j] = arr
+                j = j + 1
             i = i + 1
         #print("--------------------------sats_coor_str---------------------")
         #print(sats_coor_str)
@@ -205,56 +241,42 @@ class Myserver(socketserver.BaseRequestHandler):
         self.modify_ISL_para()
 
     def handle(self):
-        global net
-
-        conn = self.request
-        k = 0
         start_import_flag = 0
         start_calc_links_flag = 0
-        while True:
+        for raw_line in self.rfile:
             try:
-                
-                content = conn.recv(102400).decode('utf-8')
-                #print(content)
-                #time.sleep(0.5)
-                if (content == 'constellation import start\r\n'):
+                content = raw_line.decode('utf-8').strip()
+                if not content:
+                    continue
+
+                if (content == 'constellation import start'):
                     start_import_flag = 1
                     print("start import routers")
                     self.sat_line_str = ''
-                elif (content == 'constellation import end\r\n'):
+                elif (content == 'constellation import end'):
                     print("calc sat num")
                     start_import_flag = 0
                     self.calc_sat_num()
-                elif (content == 'forwards\r\n'):
+                elif (content == 'forwards'):
                     print('net start\n')
                     #inet.start()
-                elif (content == 'stop\r\n'):
+                elif (content == 'stop'):
                     print('net stop\n')
                     #net.stop()
-                elif (content == 'ISL info start\r\n'):
+                elif (content == 'ISL info start'):
                     print('recv ISL info start\n')
                     start_calc_links_flag = 1
                     self.sat_coor_line_str = ''
-                elif (content == 'ISL info end\r\n'):
+                elif (content == 'ISL info end'):
                     print('recv ISL info end\n')
                     start_calc_links_flag = 0
                     self.parse_ISL_info()
                 else :  
                     if (start_import_flag == 1):
-                        print("add sat info")
-                        self.sat_line_str = self.sat_line_str + content
-                        #print("self.sat_line_str:",self.sat_line_str)
-                        if (self.sat_line_str.find("constellation import end") != -1):
-                            start_import_flag = 0
-                            self.calc_sat_num()
+                        self.sat_line_str = self.sat_line_str + content + '\r\n'
                     if (start_calc_links_flag == 1):
-                        print("recv ISL info start2\n")
-                        self.sat_coor_line_str = self.sat_coor_line_str + content
-                        #print("self.sat_coor_line_str:",self.sat_coor_line_str)
-                        if (self.sat_coor_line_str.find("ISL info end") != -1):
-                            start_calc_links_flag = 0
-                            self.parse_ISL_info()
-            except ConnectionResetError:
+                        self.sat_coor_line_str = self.sat_coor_line_str + content + '\r\n'
+            except (ConnectionResetError, UnicodeDecodeError):
                 break
 
 def get_latitude(x, y, z):
@@ -279,6 +301,10 @@ def myNet(num):
     global ISLs
     global ISLs_origin
     global net
+    global TOPOLOGY
+    ISLs.clear()
+    ISLs_origin.clear()
+    sats.clear()
 
     if(net != None) :
         net.stop()
@@ -312,6 +338,10 @@ def myNet(num):
         #print(sats_str[num-1][9][0:-1])
         M = int(sats_str[num-1][9][0:-1]) + 1
         N = int(num / M)
+
+    TOPOLOGY["num_sats"] = num
+    TOPOLOGY["sats_per_plane"] = M
+    TOPOLOGY["num_planes"] = N
 
     print("num is %d, N is %d, M is %d" % (num, N, M))
     #num = 33 # just for test
@@ -499,6 +529,9 @@ class LinuxRouter( Node ):
         self.cmd( 'sysctl net.ipv6.conf.all.forwarding=0' )
         super( LinuxRouter, self ).terminate()
 
+class ReusableThreadingTCPServer(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+
 if __name__ == '__main__':
     setLogLevel('info')
     info('*** Scratch network demo (kernel datapath)\n')
@@ -507,7 +540,7 @@ if __name__ == '__main__':
     
     # 启动服务器线程
     def start_server():
-        server = socketserver.ThreadingTCPServer(('127.0.0.1', 12345), Myserver)
+        server = ReusableThreadingTCPServer(('127.0.0.1', 12345), Myserver)
         server.serve_forever()
     
     server_thread = threading.Thread(target=start_server)
