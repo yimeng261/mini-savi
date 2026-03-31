@@ -53,6 +53,42 @@ static unsigned int grid_coverage_socket_send_codes(int satellite_id,
                                                     int cell_count,
                                                     unsigned int use_icosahedral);
 
+typedef struct {
+    double sat_x;
+    double sat_y;
+    double sat_z;
+    double sat_distance;
+    double nadir_x;
+    double nadir_y;
+    double nadir_z;
+    double body_radius;
+    double cos_coverage_angle;
+    double horizon_cos_angle;
+    unsigned int requires_horizon_check;
+    unsigned int valid;
+} SatelliteCoverageContext;
+
+static void satellite_coverage_context_init(const Satellite sat,
+                                           double coverage_angle,
+                                           const CentralBody *pcb,
+                                           SatelliteCoverageContext *ctx);
+static int satellite_covers_grid_with_context(const GridCell *cell,
+                                              const SatelliteCoverageContext *ctx);
+static unsigned int append_covered_grid(int **covered_grids,
+                                        int *coverage_count,
+                                        int *max_coverage,
+                                        int grid_idx,
+                                        const char *grid_kind,
+                                        int satellite_id);
+static int collect_coverage_for_cells(const GridCell *cells,
+                                      int cell_count,
+                                      const SatelliteCoverageContext *ctx,
+                                      int **covered_grids,
+                                      int *coverage_count,
+                                      int *max_coverage,
+                                      const char *grid_kind,
+                                      int satellite_id);
+
 /*
  * grid_coverage_init
  * 初始化格网覆盖系统（二十面体格网）
@@ -541,109 +577,130 @@ static int point_in_triangle(double px, double py, double pz,
     return fabs(total_angle - 2*M_PI) < 0.1; // 允许一定的数值误差
 }
 
+static void
+satellite_coverage_context_init(const Satellite sat, double coverage_angle,
+                                const CentralBody *pcb,
+                                SatelliteCoverageContext *ctx) {
+    double sat_distance_sq;
+
+    memset(ctx, 0, sizeof(*ctx));
+    if (!sat || !pcb) {
+        return;
+    }
+
+    ctx->sat_x = sat->x_C.x;
+    ctx->sat_y = sat->x_C.y;
+    ctx->sat_z = sat->x_C.z;
+    ctx->body_radius = pcb->radius;
+
+    sat_distance_sq = ctx->sat_x * ctx->sat_x +
+                      ctx->sat_y * ctx->sat_y +
+                      ctx->sat_z * ctx->sat_z;
+    if (sat_distance_sq <= (pcb->radius + 100.0) * (pcb->radius + 100.0)) {
+        return;
+    }
+
+    ctx->sat_distance = sqrt(sat_distance_sq);
+    ctx->nadir_x = -ctx->sat_x / ctx->sat_distance;
+    ctx->nadir_y = -ctx->sat_y / ctx->sat_distance;
+    ctx->nadir_z = -ctx->sat_z / ctx->sat_distance;
+    ctx->cos_coverage_angle = cos(coverage_angle);
+    ctx->horizon_cos_angle = pcb->radius / ctx->sat_distance;
+    ctx->requires_horizon_check =
+        (ctx->cos_coverage_angle < ctx->horizon_cos_angle);
+    ctx->valid = TRUE;
+}
+
 /*
  * satellite_covers_grid
  * 判断卫星是否覆盖格网单元(完全覆盖所有顶点)
  */
-static int satellite_covers_grid(const Satellite sat, const GridCell *cell,
-                                double coverage_angle, const CentralBody *pcb) {
-    if (!sat || !cell) return 0;
-    
-    // 卫星位置(地心坐标)
-    double sat_x = sat->x_C.x;
-    double sat_y = sat->x_C.y;
-    double sat_z = sat->x_C.z;
-    
-    
-    // 检查格网三角形的所有三个顶点是否都在卫星覆盖范围内
+static int
+satellite_covers_grid_with_context(const GridCell *cell,
+                                   const SatelliteCoverageContext *ctx) {
+    if (!cell || !ctx || !ctx->valid) return 0;
+
     for (int i = 0; i < 3; i++) {
-        double vertex_x = cell->vertices[i][0] * pcb->radius;
-        double vertex_y = cell->vertices[i][1] * pcb->radius;
-        double vertex_z = cell->vertices[i][2] * pcb->radius;
-        
-        // 计算卫星位置到地心的距离和方向
-        double sat_distance = sqrt(sat_x*sat_x + sat_y*sat_y + sat_z*sat_z);
-        if (sat_distance < pcb->radius + 100.0) {
-            return 0; // 卫星太低，不合理
-        }
-        
-        // 卫星指向地心的单位向量(nadir方向)
-        double nadir_x = -sat_x / sat_distance;
-        double nadir_y = -sat_y / sat_distance;
-        double nadir_z = -sat_z / sat_distance;
-        
-        // 卫星指向顶点的向量
-        double to_vertex_x = vertex_x - sat_x;
-        double to_vertex_y = vertex_y - sat_y;
-        double to_vertex_z = vertex_z - sat_z;
-        
-        // 归一化
-        double to_vertex_dist = sqrt(to_vertex_x*to_vertex_x + to_vertex_y*to_vertex_y + to_vertex_z*to_vertex_z);
-        if (to_vertex_dist < 1e-6) continue; // 避免除零
-        
-        to_vertex_x /= to_vertex_dist;
-        to_vertex_y /= to_vertex_dist;
-        to_vertex_z /= to_vertex_dist;
-        
-        // 计算从nadir方向到顶点的角度
-        double cos_angle = nadir_x * to_vertex_x + nadir_y * to_vertex_y + nadir_z * to_vertex_z;
-        
-        // 限制cos值在有效范围内
-        if (cos_angle > 1.0) cos_angle = 1.0;
-        if (cos_angle < -1.0) cos_angle = -1.0;
-        
-        double angle = acos(cos_angle);
-        
-        
-        // 如果任何一个顶点不在覆盖范围内，则不覆盖此格网
-        if (angle > coverage_angle) {
+        double vertex_x = cell->vertices[i][0] * ctx->body_radius;
+        double vertex_y = cell->vertices[i][1] * ctx->body_radius;
+        double vertex_z = cell->vertices[i][2] * ctx->body_radius;
+        double to_vertex_x = vertex_x - ctx->sat_x;
+        double to_vertex_y = vertex_y - ctx->sat_y;
+        double to_vertex_z = vertex_z - ctx->sat_z;
+        double to_vertex_dist = sqrt(to_vertex_x * to_vertex_x +
+                                     to_vertex_y * to_vertex_y +
+                                     to_vertex_z * to_vertex_z);
+        double cos_angle;
+
+        if (to_vertex_dist < 1e-6) continue;
+
+        cos_angle = (ctx->nadir_x * to_vertex_x +
+                     ctx->nadir_y * to_vertex_y +
+                     ctx->nadir_z * to_vertex_z) / to_vertex_dist;
+        if (cos_angle < ctx->cos_coverage_angle) {
             return 0;
         }
-        
-        // 检查地平线遮挡：使用简化的地平线角度检查
-        // 对于LEO卫星，主要检查顶点是否在卫星的地平线之上
-        
-        // 计算卫星的地平线角度（从天底点开始）
-        double horizon_angle = acos(pcb->radius / sat_distance);
-        
-        // 如果覆盖角度小于等于地平线角度，则不需要进一步检查遮挡
-        // 因为所有在覆盖角度内的点都在地平线之上
-        if (coverage_angle <= horizon_angle) {
-            // 不需要额外的遮挡检查
+
+        if (!ctx->requires_horizon_check) {
             continue;
         }
-        
-        // 如果覆盖角度大于地平线角度，检查此顶点是否在地平线之上
-        // 计算卫星到顶点向量与卫星到地心向量的夹角
-        double sat_to_vertex_x = vertex_x - sat_x;
-        double sat_to_vertex_y = vertex_y - sat_y;
-        double sat_to_vertex_z = vertex_z - sat_z;
-        double vertex_distance = sqrt(sat_to_vertex_x*sat_to_vertex_x + 
-                                     sat_to_vertex_y*sat_to_vertex_y + 
-                                     sat_to_vertex_z*sat_to_vertex_z);
-        
-        if (vertex_distance < 1e-6) continue;
-        
-        // 计算卫星到顶点与卫星到地心的夹角
-        double dot_product = (-sat_x * sat_to_vertex_x + 
-                             -sat_y * sat_to_vertex_y + 
-                             -sat_z * sat_to_vertex_z);
-        double cos_angle_to_vertex = dot_product / (sat_distance * vertex_distance);
-        
-        // 限制cos值范围
-        if (cos_angle_to_vertex > 1.0) cos_angle_to_vertex = 1.0;
-        if (cos_angle_to_vertex < -1.0) cos_angle_to_vertex = -1.0;
-        
-        double angle_to_vertex = acos(cos_angle_to_vertex);
-        
-        // 如果角度大于地平线角度，说明在地平线以下，被遮挡
-        if (angle_to_vertex > horizon_angle) {
+
+        if (((-ctx->sat_x * to_vertex_x) +
+             (-ctx->sat_y * to_vertex_y) +
+             (-ctx->sat_z * to_vertex_z)) <
+            (ctx->horizon_cos_angle * ctx->sat_distance * to_vertex_dist)) {
             return 0;
         }
     }
-    
-    
-    return 1; // 所有顶点都在覆盖范围内
+
+    return 1;
+}
+
+static unsigned int
+append_covered_grid(int **covered_grids, int *coverage_count,
+                    int *max_coverage, int grid_idx, const char *grid_kind,
+                    int satellite_id) {
+    if (*coverage_count >= *max_coverage) {
+        int new_size = *max_coverage == 0 ? 16 : *max_coverage * 2;
+        int *new_buffer = realloc(*covered_grids, new_size * sizeof(int));
+
+        if (!new_buffer) {
+            fprintf(stderr,
+                    "Failed to allocate %s grid coverage array for satellite %d\n",
+                    grid_kind, satellite_id);
+            return FALSE;
+        }
+
+        *covered_grids = new_buffer;
+        *max_coverage = new_size;
+    }
+
+    (*covered_grids)[*coverage_count] = grid_idx;
+    (*coverage_count)++;
+    return TRUE;
+}
+
+static int
+collect_coverage_for_cells(const GridCell *cells, int cell_count,
+                           const SatelliteCoverageContext *ctx,
+                           int **covered_grids, int *coverage_count,
+                           int *max_coverage, const char *grid_kind,
+                           int satellite_id) {
+    int added = 0;
+
+    for (int i = 0; i < cell_count; i++) {
+        if (!satellite_covers_grid_with_context(&cells[i], ctx)) {
+            continue;
+        }
+
+        if (!append_covered_grid(covered_grids, coverage_count, max_coverage,
+                                 i, grid_kind, satellite_id)) {
+            break;
+        }
+        added++;
+    }
+
+    return added;
 }
 
 /*
@@ -704,6 +761,9 @@ void grid_coverage_compute(const Satellite_list satellites, const CentralBody *p
     int total_coverage = 0;
     
     for (sl = satellites; sl != NULL; sl = sl->next) {
+        SatelliteCoverageContext sat_ctx;
+        int added = 0;
+
         if (!sl->s || !sl->s->can_display_satellite) continue;
         
         int satellite_id = sl->s->id;
@@ -711,96 +771,35 @@ void grid_coverage_compute(const Satellite_list satellites, const CentralBody *p
         sat_cov->satellite_id = satellite_id;
         sat_cov->ico_coverage_count = 0;
         sat_cov->latlon_coverage_count = 0;
+        satellite_coverage_context_init(sl->s, grid_coverage.coverage_angle,
+                                        pcb, &sat_ctx);
+        if (!sat_ctx.valid) {
+            grid_coverage.satellite_count++;
+            continue;
+        }
         
         // 根据当前模式处理格网
         if (grid_coverage.both_mode) {
-            // Both模式：分别处理两种格网
-            // 处理二十面体格网
-            for (int i = 0; i < grid_coverage.ico_cell_count; i++) {
-                GridCell *cell = &grid_coverage.ico_cells[i];
-                
-                if (satellite_covers_grid(sl->s, cell, grid_coverage.coverage_angle, pcb)) {
-                    // 确保数组足够大
-                    if (sat_cov->ico_coverage_count >= sat_cov->max_ico_coverage) {
-                        int new_size = sat_cov->max_ico_coverage == 0 ? 16 : sat_cov->max_ico_coverage * 2;
-                        sat_cov->covered_ico_grids = realloc(sat_cov->covered_ico_grids, new_size * sizeof(int));
-                        if (!sat_cov->covered_ico_grids) {
-                            fprintf(stderr, "Failed to allocate ico grid coverage array for satellite %d\n", satellite_id);
-                            continue;
-                        }
-                        sat_cov->max_ico_coverage = new_size;
-                    }
-                    
-                    sat_cov->covered_ico_grids[sat_cov->ico_coverage_count] = i;
-                    sat_cov->ico_coverage_count++;
-                    total_coverage++;
-                }
-            }
-            
-            // 处理经纬度格网
-            for (int i = 0; i < grid_coverage.latlon_cell_count; i++) {
-                GridCell *cell = &grid_coverage.latlon_cells[i];
-                
-                if (satellite_covers_grid(sl->s, cell, grid_coverage.coverage_angle, pcb)) {
-                    // 确保数组足够大
-                    if (sat_cov->latlon_coverage_count >= sat_cov->max_latlon_coverage) {
-                        int new_size = sat_cov->max_latlon_coverage == 0 ? 16 : sat_cov->max_latlon_coverage * 2;
-                        sat_cov->covered_latlon_grids = realloc(sat_cov->covered_latlon_grids, new_size * sizeof(int));
-                        if (!sat_cov->covered_latlon_grids) {
-                            fprintf(stderr, "Failed to allocate latlon grid coverage array for satellite %d\n", satellite_id);
-                            continue;
-                        }
-                        sat_cov->max_latlon_coverage = new_size;
-                    }
-                    
-                    sat_cov->covered_latlon_grids[sat_cov->latlon_coverage_count] = i;
-                    sat_cov->latlon_coverage_count++;
-                    total_coverage++;
-                }
-            }
+            added += collect_coverage_for_cells(
+                grid_coverage.ico_cells, grid_coverage.ico_cell_count, &sat_ctx,
+                &sat_cov->covered_ico_grids, &sat_cov->ico_coverage_count,
+                &sat_cov->max_ico_coverage, "ico", satellite_id);
+            added += collect_coverage_for_cells(
+                grid_coverage.latlon_cells, grid_coverage.latlon_cell_count, &sat_ctx,
+                &sat_cov->covered_latlon_grids, &sat_cov->latlon_coverage_count,
+                &sat_cov->max_latlon_coverage, "latlon", satellite_id);
         } else if (grid_coverage.grid_type == GRID_TYPE_ICOSAHEDRAL) {
-            // 仅二十面体模式
-            for (int i = 0; i < grid_coverage.ico_cell_count; i++) {
-                GridCell *cell = &grid_coverage.ico_cells[i];
-                
-                if (satellite_covers_grid(sl->s, cell, grid_coverage.coverage_angle, pcb)) {
-                    if (sat_cov->ico_coverage_count >= sat_cov->max_ico_coverage) {
-                        int new_size = sat_cov->max_ico_coverage == 0 ? 16 : sat_cov->max_ico_coverage * 2;
-                        sat_cov->covered_ico_grids = realloc(sat_cov->covered_ico_grids, new_size * sizeof(int));
-                        if (!sat_cov->covered_ico_grids) {
-                            fprintf(stderr, "Failed to allocate ico grid coverage array for satellite %d\n", satellite_id);
-                            continue;
-                        }
-                        sat_cov->max_ico_coverage = new_size;
-                    }
-                    
-                    sat_cov->covered_ico_grids[sat_cov->ico_coverage_count] = i;
-                    sat_cov->ico_coverage_count++;
-                    total_coverage++;
-                }
-            }
+            added += collect_coverage_for_cells(
+                grid_coverage.ico_cells, grid_coverage.ico_cell_count, &sat_ctx,
+                &sat_cov->covered_ico_grids, &sat_cov->ico_coverage_count,
+                &sat_cov->max_ico_coverage, "ico", satellite_id);
         } else {
-            // 仅经纬度模式
-            for (int i = 0; i < grid_coverage.latlon_cell_count; i++) {
-                GridCell *cell = &grid_coverage.latlon_cells[i];
-                
-                if (satellite_covers_grid(sl->s, cell, grid_coverage.coverage_angle, pcb)) {
-                    if (sat_cov->latlon_coverage_count >= sat_cov->max_latlon_coverage) {
-                        int new_size = sat_cov->max_latlon_coverage == 0 ? 16 : sat_cov->max_latlon_coverage * 2;
-                        sat_cov->covered_latlon_grids = realloc(sat_cov->covered_latlon_grids, new_size * sizeof(int));
-                        if (!sat_cov->covered_latlon_grids) {
-                            fprintf(stderr, "Failed to allocate latlon grid coverage array for satellite %d\n", satellite_id);
-                            continue;
-                        }
-                        sat_cov->max_latlon_coverage = new_size;
-                    }
-                    
-                    sat_cov->covered_latlon_grids[sat_cov->latlon_coverage_count] = i;
-                    sat_cov->latlon_coverage_count++;
-                    total_coverage++;
-                }
-            }
+            added += collect_coverage_for_cells(
+                grid_coverage.latlon_cells, grid_coverage.latlon_cell_count, &sat_ctx,
+                &sat_cov->covered_latlon_grids, &sat_cov->latlon_coverage_count,
+                &sat_cov->max_latlon_coverage, "latlon", satellite_id);
         }
+        total_coverage += added;
         
         grid_coverage.satellite_count++;
     }

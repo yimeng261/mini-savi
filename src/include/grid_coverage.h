@@ -128,16 +128,6 @@ int grid_coverage_socket_init(void);
 void grid_coverage_socket_cleanup(void);
 void grid_coverage_socket_send_data(void);
 
-/* 辅助函数 */
-static int point_in_triangle(double px, double py, double pz,
-                            double v1x, double v1y, double v1z,
-                            double v2x, double v2y, double v2z,
-                            double v3x, double v3y, double v3z);
-static double angle_between_vectors(double x1, double y1, double z1,
-                                   double x2, double y2, double z2);
-static int satellite_covers_grid(const Satellite sat, const GridCell *cell,
-                                double coverage_angle, const CentralBody *pcb);
-
 /* TCL命令接口 */
 char *grid_coverage_on_cmd(int argc, char *argv[]);
 char *grid_coverage_on_latlon_cmd(int argc, char *argv[]);
