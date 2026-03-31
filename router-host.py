@@ -33,6 +33,7 @@ TOPOLOGY = {
     "sats_per_plane": 0,
     "num_planes": 0,
 }
+LINK_STATES = {}
 
 
 class Myserver(socketserver.StreamRequestHandler):
@@ -112,6 +113,7 @@ class Myserver(socketserver.StreamRequestHandler):
         global ISLs
         global ISLs_origin
         global TOPOLOGY
+        global LINK_STATES
 
         #print("enter modify_ISL_para()")
         #print("self.num")
@@ -125,27 +127,21 @@ class Myserver(socketserver.StreamRequestHandler):
         if self.num <= 0 or sats_per_plane <= 0:
             return
 
-        for i in range(0, self.num):
-             for j in range(0, self.num):
-                #print("i=%d, j=%d" % (i, j))
-                islx = ISLs[i]
-                islx_origin = ISLs_origin[i]
-                if ((j in islx_origin.keys()) == False) :
+        for i, neighbors in ISLs_origin.items():
+            for j in neighbors:
+                if not ((i + sats_per_plane == j) or (i - sats_per_plane == j)):
                     continue
-                
-                if(i + sats_per_plane == j) or (i - sats_per_plane == j):
-                    isl = ISLs[i][j]
-                    #print(self.ISL_delays)
-                    if(self.ISL_delays[i][j] != 0):
-                        #ISLs[i][j] = None
-                        sats[i].cmd('ifconfig ' + 'eth-r'+str(i+1)+'r'+str(j+1) + ' up')
-                        sats[j].cmd('ifconfig ' + 'eth-r'+str(j+1)+'r'+str(i+1) + ' up')
-                        print("up&&&&&&&%d%d"%(i,j))
-                    else:
-                        #ISLs[i][j] = None
-                        sats[i].cmd('ifconfig ' + 'eth-r'+str(i+1)+'r'+str(j+1) + ' down')
-                        sats[j].cmd('ifconfig ' + 'eth-r'+str(j+1)+'r'+str(i+1) + ' down')
-                        print("down******%d%d"%(i,j))
+
+                delay = self.ISL_delays.get(i, {}).get(j, 0)
+                new_state = 'up' if delay != 0 else 'down'
+                link_key = tuple(sorted((i, j)))
+                if LINK_STATES.get(link_key) == new_state:
+                    continue
+
+                sats[i].cmd('ifconfig ' + 'eth-r'+str(i+1)+'r'+str(j+1) + ' ' + new_state)
+                sats[j].cmd('ifconfig ' + 'eth-r'+str(j+1)+'r'+str(i+1) + ' ' + new_state)
+                LINK_STATES[link_key] = new_state
+                print(f"{new_state} {'*' if new_state == 'down' else '&'}{i}{j}")
     def calc_ISL_delay(self):
         print("enter calc_ISL_delay()")
         c = 300000
@@ -323,9 +319,11 @@ def myNet(num):
     global ISLs_origin
     global net
     global TOPOLOGY
+    global LINK_STATES
     ISLs.clear()
     ISLs_origin.clear()
     sats.clear()
+    LINK_STATES.clear()
 
     if(net != None) :
         net.stop()
