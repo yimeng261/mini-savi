@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential tcl tk tcl-dev tk-dev
+
+      - name: Build SaVi
+        run: make ARCH=linux
+
+      - name: Build Grid Generators
+        run: |
+          gcc -o grid_calc grid_calc.c -lm
+          gcc -o latlon_grid_calc latlon_grid_calc.c -lm
+
+      - name: Python Syntax Check
+        run: |
+          python3 -m py_compile router-host.py
+          python3 -m py_compile receive_grid_coverage_data.py
+          python3 -m py_compile plot_grid_coverage.py
+          python3 -m py_compile control_plane_utils.py
+
+      - name: Tcl Syntax Check
+        run: |
+          tclsh <<'EOF'
+          source tcl/main.tcl
+          source tcl/grid.tcl
+          source tcl/init.tcl
+          puts ok
+          EOF
+
+      - name: Run Unit Tests
+        run: python3 -m unittest discover -s tests -v

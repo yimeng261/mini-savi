@@ -61,3 +61,4 @@ tcl/tclIndex
 *.png
 *.pkl
 *.json
+__pycache__/

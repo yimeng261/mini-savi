@@ -17,6 +17,8 @@ import math
 import subprocess
 import threading
 
+from control_plane_utils import compute_link_state_updates
+
 sat_lines = {}
 sat_coor_lines = {}
 sat_line_str = ''
@@ -127,21 +129,14 @@ class Myserver(socketserver.StreamRequestHandler):
         if self.num <= 0 or sats_per_plane <= 0:
             return
 
-        for i, neighbors in ISLs_origin.items():
-            for j in neighbors:
-                if not ((i + sats_per_plane == j) or (i - sats_per_plane == j)):
-                    continue
+        updates, LINK_STATES = compute_link_state_updates(
+            ISLs_origin, self.ISL_delays, sats_per_plane, LINK_STATES
+        )
 
-                delay = self.ISL_delays.get(i, {}).get(j, 0)
-                new_state = 'up' if delay != 0 else 'down'
-                link_key = tuple(sorted((i, j)))
-                if LINK_STATES.get(link_key) == new_state:
-                    continue
-
-                sats[i].cmd('ifconfig ' + 'eth-r'+str(i+1)+'r'+str(j+1) + ' ' + new_state)
-                sats[j].cmd('ifconfig ' + 'eth-r'+str(j+1)+'r'+str(i+1) + ' ' + new_state)
-                LINK_STATES[link_key] = new_state
-                print(f"{new_state} {'*' if new_state == 'down' else '&'}{i}{j}")
+        for i, j, new_state in updates:
+            sats[i].cmd('ifconfig ' + 'eth-r'+str(i+1)+'r'+str(j+1) + ' ' + new_state)
+            sats[j].cmd('ifconfig ' + 'eth-r'+str(j+1)+'r'+str(i+1) + ' ' + new_state)
+            print(f"{new_state} {'*' if new_state == 'down' else '&'}{i}{j}")
     def calc_ISL_delay(self):
         print("enter calc_ISL_delay()")
         c = 300000

@@ -5,8 +5,10 @@
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
+#include <sys/stat.h>
+#include <errno.h>
 
-#define FILEPATH "./mini-savi/"
+#define DEFAULT_FILEPATH "./mini-savi/"
 
 // 格网编码结构（与经纬度对应）
 typedef struct {
@@ -29,8 +31,16 @@ typedef struct {
 } LatLonGridMesh;
 
 LatLonGridMesh grid_mesh = {0};
+static char output_dir[256] = DEFAULT_FILEPATH;
 
 void write_grid_metadata(const char *base_filename);
+int parse_args(int argc, char *argv[], int *lat_divisions, int *lon_divisions);
+void print_usage(const char *progname);
+unsigned int ensure_output_dir_exists(void);
+unsigned int validate_rectangle_count(int lat_divisions, int lon_divisions);
+unsigned int validate_unique_latlon_codes(void);
+unsigned int validate_no_degenerate_faces(void);
+unsigned int run_grid_validations(int lat_divisions, int lon_divisions);
 
 // 初始化网格内存
 int init_grid_mesh(int max_vertices, int max_faces) {
@@ -174,7 +184,7 @@ void generate_latlon_grid(int lat_divisions, int lon_divisions) {
 // 输出OOGL格式文件（将矩形转换为三角形）
 void write_oogl_grid(const char *base_filename) {
     char path[256];
-    snprintf(path, sizeof(path), "%s%s.oogl", FILEPATH, base_filename);
+    snprintf(path, sizeof(path), "%s%s.oogl", output_dir, base_filename);
     
     FILE *fp = fopen(path, "w");
     if (!fp) {
@@ -226,7 +236,7 @@ void write_oogl_grid(const char *base_filename) {
 // 输出OOGL线框格式
 void write_oogl_wireframe(const char *base_filename) {
     char path[256];
-    snprintf(path, sizeof(path), "%s%s_wireframe.oogl", FILEPATH, base_filename);
+    snprintf(path, sizeof(path), "%s%s_wireframe.oogl", output_dir, base_filename);
     
     FILE *fp = fopen(path, "w");
     if (!fp) {
@@ -315,7 +325,7 @@ void write_grid_metadata(const char *base_filename) {
     char path[256];
     FILE *fp;
 
-    snprintf(path, sizeof(path), "%s%s.json", FILEPATH, base_filename);
+    snprintf(path, sizeof(path), "%s%s.json", output_dir, base_filename);
     fp = fopen(path, "w");
     if (!fp) {
         printf("无法创建元数据文件: %s\n", path);
@@ -340,16 +350,12 @@ void write_grid_metadata(const char *base_filename) {
 
 int main(int argc, char* argv[]) {
     int lat_divisions, lon_divisions;
-    
-    printf("经纬度格网生成器\n");
-    printf("=================\n");
-    printf("将地球表面按经度和纬度等间隔划分成规则矩形\n\n");
-    
-    printf("请输入纬度划分数（建议: 18, 36, 72等）: ");
-    scanf("%d", &lat_divisions);
-    
-    printf("请输入经度划分数（建议: 36, 72, 144等）: ");
-    scanf("%d", &lon_divisions);
+    if (!parse_args(argc, argv, &lat_divisions, &lon_divisions)) {
+        return 1;
+    }
+    if (!ensure_output_dir_exists()) {
+        return 1;
+    }
     
     if (lat_divisions < 1 || lat_divisions > 180 || 
         lon_divisions < 1 || lon_divisions > 360) {
@@ -377,6 +383,10 @@ int main(int argc, char* argv[]) {
     
     printf("\n正在生成格网...\n");
     generate_latlon_grid(lat_divisions, lon_divisions);
+    if (!run_grid_validations(lat_divisions, lon_divisions)) {
+        free_grid_mesh();
+        return 1;
+    }
     
     printf("\n生成完成！\n");
     printf("实际使用：\n");
@@ -397,10 +407,161 @@ int main(int argc, char* argv[]) {
     // 清理内存
     free_grid_mesh();
     
-    printf("\n完成！文件保存在 %s 目录下\n", FILEPATH);
+    printf("\n完成！文件保存在 %s 目录下\n", output_dir);
     printf("  - %s.oogl (格网文件)\n", filename);
     printf("  - %s_wireframe.oogl (线框文件)\n", filename);
     printf("  - %s.json (元数据文件)\n", filename);
     
     return 0;
+}
+
+int parse_args(int argc, char *argv[], int *lat_divisions, int *lon_divisions) {
+    int lat_set = 0;
+    int lon_set = 0;
+
+    for (int i = 1; i < argc; i++) {
+        if ((strcmp(argv[i], "--lat") == 0 || strcmp(argv[i], "-a") == 0) &&
+            i + 1 < argc) {
+            *lat_divisions = atoi(argv[++i]);
+            lat_set = 1;
+        } else if ((strcmp(argv[i], "--lon") == 0 || strcmp(argv[i], "-o") == 0) &&
+                   i + 1 < argc) {
+            *lon_divisions = atoi(argv[++i]);
+            lon_set = 1;
+        } else if (strcmp(argv[i], "--output-dir") == 0 && i + 1 < argc) {
+            snprintf(output_dir, sizeof(output_dir), "%s", argv[++i]);
+            if (output_dir[strlen(output_dir) - 1] != '/') {
+                strncat(output_dir, "/", sizeof(output_dir) - strlen(output_dir) - 1);
+            }
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            print_usage(argv[0]);
+            return 0;
+        } else if (!lat_set) {
+            *lat_divisions = atoi(argv[i]);
+            lat_set = 1;
+        } else if (!lon_set) {
+            *lon_divisions = atoi(argv[i]);
+            lon_set = 1;
+        } else {
+            fprintf(stderr, "Unknown argument: %s\n", argv[i]);
+            print_usage(argv[0]);
+            return 0;
+        }
+    }
+
+    if (!lat_set) {
+        printf("请输入纬度划分数（建议: 18, 36, 72等）: ");
+        scanf("%d", lat_divisions);
+    }
+    if (!lon_set) {
+        printf("请输入经度划分数（建议: 36, 72, 144等）: ");
+        scanf("%d", lon_divisions);
+    }
+
+    if (*lat_divisions < 1 || *lat_divisions > 180 ||
+        *lon_divisions < 1 || *lon_divisions > 360) {
+        fprintf(stderr, "错误：划分数超出有效范围！\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+void print_usage(const char *progname) {
+    printf("Usage: %s [--lat N] [--lon N] [--output-dir DIR]\n", progname);
+}
+
+unsigned int ensure_output_dir_exists(void) {
+    struct stat st;
+
+    if (stat(output_dir, &st) == 0) {
+        return S_ISDIR(st.st_mode);
+    }
+
+    if (mkdir(output_dir, 0755) == 0) {
+        return 1;
+    }
+
+    fprintf(stderr, "无法创建输出目录 %s: %s\n", output_dir, strerror(errno));
+    return 0;
+}
+
+unsigned int validate_rectangle_count(int lat_divisions, int lon_divisions) {
+    int expected_rectangles = lat_divisions * lon_divisions;
+    if (grid_mesh.face_count != expected_rectangles) {
+        fprintf(stderr, "校验失败：矩形数不匹配，期望 %d，实际 %d\n",
+                expected_rectangles, grid_mesh.face_count);
+        return 0;
+    }
+
+    return 1;
+}
+
+unsigned int validate_unique_latlon_codes(void) {
+    for (int i = 0; i < grid_mesh.face_count; i++) {
+        for (int j = i + 1; j < grid_mesh.face_count; j++) {
+            if (strcmp(grid_mesh.face_codes[i].code_string,
+                       grid_mesh.face_codes[j].code_string) == 0) {
+                fprintf(stderr, "校验失败：发现重复编码 %s\n",
+                        grid_mesh.face_codes[i].code_string);
+                return 0;
+            }
+        }
+    }
+
+    return 1;
+}
+
+unsigned int validate_no_degenerate_faces(void) {
+    for (int i = 0; i < grid_mesh.face_count; i++) {
+        int quads[4];
+        double areas[2] = {0.0, 0.0};
+
+        for (int j = 0; j < 4; j++) {
+            quads[j] = grid_mesh.faces[i][j];
+        }
+
+        /* Polar caps collapse one edge into a single pole vertex. */
+        if (quads[0] == quads[3] || quads[1] == quads[2]) {
+            continue;
+        }
+
+        for (int tri = 0; tri < 2; tri++) {
+            int i1 = quads[0];
+            int i2 = tri == 0 ? quads[1] : quads[2];
+            int i3 = tri == 0 ? quads[2] : quads[3];
+            double ax = grid_mesh.vertices[i2][0] - grid_mesh.vertices[i1][0];
+            double ay = grid_mesh.vertices[i2][1] - grid_mesh.vertices[i1][1];
+            double az = grid_mesh.vertices[i2][2] - grid_mesh.vertices[i1][2];
+            double bx = grid_mesh.vertices[i3][0] - grid_mesh.vertices[i1][0];
+            double by = grid_mesh.vertices[i3][1] - grid_mesh.vertices[i1][1];
+            double bz = grid_mesh.vertices[i3][2] - grid_mesh.vertices[i1][2];
+            double cx = ay * bz - az * by;
+            double cy = az * bx - ax * bz;
+            double cz = ax * by - ay * bx;
+            areas[tri] = cx * cx + cy * cy + cz * cz;
+        }
+
+        if (areas[0] < 1e-18 || areas[1] < 1e-18) {
+            fprintf(stderr, "校验失败：发现退化面，索引 %d\n", i);
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+unsigned int run_grid_validations(int lat_divisions, int lon_divisions) {
+    if (!validate_rectangle_count(lat_divisions, lon_divisions)) {
+        return 0;
+    }
+    if (!validate_unique_latlon_codes()) {
+        return 0;
+    }
+    if (!validate_no_degenerate_faces()) {
+        return 0;
+    }
+
+    printf("格网校验通过：矩形数、编码唯一性、退化面检查均正常\n");
+    return 1;
 }

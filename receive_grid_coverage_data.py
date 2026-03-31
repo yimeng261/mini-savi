@@ -89,6 +89,54 @@ def detect_grid_level(grid_count: int, grid_type: GridType) -> str:
 
 FRAGMENT_RE = re.compile(r"^(?P<sat_id>[^@]+)@(?P<index>\d+)/(?P<total>\d+)$")
 
+
+def process_coverage_message(message: str, analyzer, pending_fragments: Dict[str, Dict]) -> bool:
+    """解析单条覆盖消息；若形成完整记录则写入分析器并返回True。"""
+    parts = message.split(':', 1)
+    if len(parts) != 2:
+        return False
+
+    sat_token = parts[0]
+    grid_codes = parts[1].split(',') if parts[1] else []
+
+    fragment_match = FRAGMENT_RE.match(sat_token)
+    if fragment_match:
+        sat_id = fragment_match.group("sat_id")
+        fragment_index = int(fragment_match.group("index"))
+        fragment_total = int(fragment_match.group("total"))
+
+        pending = pending_fragments.get(sat_id)
+        if (
+            pending is None
+            or pending["total"] != fragment_total
+            or fragment_index == 1
+        ):
+            pending = {"total": fragment_total, "parts": {}}
+            pending_fragments[sat_id] = pending
+
+        pending["parts"][fragment_index] = grid_codes
+
+        if len(pending["parts"]) != fragment_total:
+            return False
+
+        merged_codes: List[str] = []
+        for idx in range(1, fragment_total + 1):
+            if idx not in pending["parts"]:
+                return False
+            merged_codes.extend(pending["parts"][idx])
+
+        del pending_fragments[sat_id]
+        if merged_codes:
+            analyzer.add_coverage_data(sat_id, merged_codes)
+            return True
+        return False
+
+    if grid_codes:
+        analyzer.add_coverage_data(sat_token, grid_codes)
+        return True
+
+    return False
+
 class GridCoverageAnalyzer:
     """格网覆盖分析器 - 支持两种格网类型，实现贪心算法"""
     
@@ -508,55 +556,12 @@ def receive_grid_coverage_data():
                 if not message:
                     continue
                 
-                # 格式: SAT_ID:grid1,grid2,grid3
-                parts = message.split(':', 1)
-                if len(parts) != 2:
+                if not process_coverage_message(message, analyzer, pending_fragments):
+                    parts = message.split(':', 1)
+                    if len(parts) == 2 and parts[1]:
+                        continue
                     print(f"[警告] 无效消息格式: {message[:50]}")
                     continue
-                
-                sat_token = parts[0]
-                grid_codes = parts[1].split(',') if parts[1] else []
-
-                fragment_match = FRAGMENT_RE.match(sat_token)
-                if fragment_match:
-                    sat_id = fragment_match.group("sat_id")
-                    fragment_index = int(fragment_match.group("index"))
-                    fragment_total = int(fragment_match.group("total"))
-
-                    pending = pending_fragments.get(sat_id)
-                    if (
-                        pending is None
-                        or pending["total"] != fragment_total
-                        or fragment_index == 1
-                    ):
-                        pending = {"total": fragment_total, "parts": {}}
-                        pending_fragments[sat_id] = pending
-
-                    pending["parts"][fragment_index] = grid_codes
-
-                    if len(pending["parts"]) != fragment_total:
-                        continue
-
-                    merged_codes: List[str] = []
-                    missing_fragment = False
-                    for idx in range(1, fragment_total + 1):
-                        if idx not in pending["parts"]:
-                            missing_fragment = True
-                            break
-                        merged_codes.extend(pending["parts"][idx])
-
-                    del pending_fragments[sat_id]
-                    if missing_fragment:
-                        continue
-
-                    if merged_codes:
-                        analyzer.add_coverage_data(sat_id, merged_codes)
-                else:
-                    sat_id = sat_token
-
-                    # 添加到分析器
-                    if grid_codes:
-                        analyzer.add_coverage_data(sat_id, grid_codes)
                 
                 # 定期打印进度
                 current_time = time.time()

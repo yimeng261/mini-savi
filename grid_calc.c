@@ -5,8 +5,10 @@
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
+#include <sys/stat.h>
+#include <errno.h>
 
-#define FILEPATH "./mini-savi/"
+#define DEFAULT_FILEPATH "./mini-savi/"
 
 const char *pos[3]={"top","left","right"};
 char code[100];
@@ -76,10 +78,18 @@ const double offset[4][3][2]={
 };
 
 GridMesh grid_mesh = {0};
+static char output_dir[256] = DEFAULT_FILEPATH;
 
 // 函数声明
 int add_vertex_xyz(double x, double y, double z);
 void write_grid_metadata(const char *base_filename);
+int parse_args(int argc, char *argv[], int *level);
+void print_usage(const char *progname);
+unsigned int ensure_output_dir_exists(void);
+unsigned int validate_face_count(int level);
+unsigned int validate_unique_quadtree_codes(void);
+unsigned int validate_no_degenerate_faces(void);
+unsigned int run_grid_validations(int level);
 
 // 四叉树编码函数声明
 void quadtree_encode_face(QuadtreeCode *code, int base_face_id, int level, int face_index_in_level);
@@ -451,7 +461,7 @@ void add_simple_triangle(double v1_lon, double v1_lat, double v2_lon, double v2_
 // 输出OOGL格式的网格文件
 void write_oogl_grid(const char* filename) {
     char path[200];
-    sprintf(path, "%s%s.oogl", FILEPATH, filename);
+    snprintf(path, sizeof(path), "%s%s.oogl", output_dir, filename);
     
     FILE *fp = fopen(path, "w");
     if (!fp) {
@@ -502,7 +512,7 @@ void write_grid_metadata(const char *base_filename) {
     char path[200];
     FILE *fp;
 
-    snprintf(path, sizeof(path), "%s%s.json", FILEPATH, base_filename);
+    snprintf(path, sizeof(path), "%s%s.json", output_dir, base_filename);
     fp = fopen(path, "w");
     if (!fp) {
         printf("无法创建元数据文件: %s\n", path);
@@ -527,7 +537,7 @@ void write_grid_metadata(const char *base_filename) {
 // 创建线框格网的OOGL文件
 void write_oogl_wireframe(const char* filename) {
     char path[200];
-    sprintf(path, "%s%s_wireframe.oogl", FILEPATH, filename);
+    snprintf(path, sizeof(path), "%s%s_wireframe.oogl", output_dir, filename);
     
     FILE *fp = fopen(path, "w");
     if (!fp) {
@@ -650,8 +660,12 @@ void estimate_memory_requirements(int level, int *vertices, int *faces) {
 int main(int argc, char* argv[])
 {
     int n;
-    printf("请输入划分级数：");
-    scanf("%d", &n);
+    if (!parse_args(argc, argv, &n)) {
+        return 1;
+    }
+    if (!ensure_output_dir_exists()) {
+        return 1;
+    }
     
     // 估算并初始化内存
     int estimated_vertices, estimated_faces;
@@ -675,6 +689,10 @@ int main(int argc, char* argv[])
     // 分配四叉树编码
     printf("分配四叉树编码...\n");
     assign_quadtree_codes_to_faces(n);
+    if (!run_grid_validations(n)) {
+        free_grid_mesh();
+        return 1;
+    }
     
     printf("生成完成！\n");
     printf("实际使用：顶点数 %d，三角面数 %d\n", grid_mesh.vertex_count, grid_mesh.face_count);
@@ -691,7 +709,7 @@ int main(int argc, char* argv[])
     write_oogl_wireframe(filename);
     write_grid_metadata(filename);
     
-    printf("\n格网文件已生成到 %s 目录\n", FILEPATH);
+    printf("\n格网文件已生成到 %s 目录\n", output_dir);
     printf("实体格网文件：%s.oogl\n", filename);
     printf("线框格网文件：%s_wireframe.oogl\n", filename);
     printf("元数据文件：%s.json\n", filename);
@@ -700,6 +718,134 @@ int main(int argc, char* argv[])
     free_grid_mesh();
     
     return 0;
+}
+
+int parse_args(int argc, char *argv[], int *level) {
+    int level_set = 0;
+
+    for (int i = 1; i < argc; i++) {
+        if ((strcmp(argv[i], "--level") == 0 || strcmp(argv[i], "-l") == 0) &&
+            i + 1 < argc) {
+            *level = atoi(argv[++i]);
+            level_set = 1;
+        } else if (strcmp(argv[i], "--output-dir") == 0 && i + 1 < argc) {
+            snprintf(output_dir, sizeof(output_dir), "%s", argv[++i]);
+            if (output_dir[strlen(output_dir) - 1] != '/') {
+                strncat(output_dir, "/", sizeof(output_dir) - strlen(output_dir) - 1);
+            }
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            print_usage(argv[0]);
+            return 0;
+        } else if (!level_set) {
+            *level = atoi(argv[i]);
+            level_set = 1;
+        } else {
+            fprintf(stderr, "Unknown argument: %s\n", argv[i]);
+            print_usage(argv[0]);
+            return 0;
+        }
+    }
+
+    if (!level_set) {
+        printf("请输入划分级数：");
+        scanf("%d", level);
+    }
+
+    if (*level < 0 || *level > MAX_QUADTREE_DEPTH) {
+        fprintf(stderr, "错误：划分级数必须在 0-%d 之间\n", MAX_QUADTREE_DEPTH);
+        return 0;
+    }
+
+    return 1;
+}
+
+void print_usage(const char *progname) {
+    printf("Usage: %s [--level N] [--output-dir DIR]\n", progname);
+}
+
+unsigned int ensure_output_dir_exists(void) {
+    struct stat st;
+
+    if (stat(output_dir, &st) == 0) {
+        return S_ISDIR(st.st_mode);
+    }
+
+    if (mkdir(output_dir, 0755) == 0) {
+        return 1;
+    }
+
+    fprintf(stderr, "无法创建输出目录 %s: %s\n", output_dir, strerror(errno));
+    return 0;
+}
+
+unsigned int validate_face_count(int level) {
+    int expected_faces = 20;
+    for (int i = 0; i < level; i++) {
+        expected_faces *= 4;
+    }
+
+    if (grid_mesh.face_count != expected_faces) {
+        fprintf(stderr, "校验失败：面数不匹配，期望 %d，实际 %d\n",
+                expected_faces, grid_mesh.face_count);
+        return 0;
+    }
+
+    return 1;
+}
+
+unsigned int validate_unique_quadtree_codes(void) {
+    for (int i = 0; i < grid_mesh.face_count; i++) {
+        for (int j = i + 1; j < grid_mesh.face_count; j++) {
+            if (strcmp(grid_mesh.face_codes[i].code_string,
+                       grid_mesh.face_codes[j].code_string) == 0) {
+                fprintf(stderr, "校验失败：发现重复编码 %s\n",
+                        grid_mesh.face_codes[i].code_string);
+                return 0;
+            }
+        }
+    }
+
+    return 1;
+}
+
+unsigned int validate_no_degenerate_faces(void) {
+    for (int i = 0; i < grid_mesh.face_count; i++) {
+        int i1 = grid_mesh.faces[i][0];
+        int i2 = grid_mesh.faces[i][1];
+        int i3 = grid_mesh.faces[i][2];
+        double ax = grid_mesh.vertices[i2][0] - grid_mesh.vertices[i1][0];
+        double ay = grid_mesh.vertices[i2][1] - grid_mesh.vertices[i1][1];
+        double az = grid_mesh.vertices[i2][2] - grid_mesh.vertices[i1][2];
+        double bx = grid_mesh.vertices[i3][0] - grid_mesh.vertices[i1][0];
+        double by = grid_mesh.vertices[i3][1] - grid_mesh.vertices[i1][1];
+        double bz = grid_mesh.vertices[i3][2] - grid_mesh.vertices[i1][2];
+        double cx = ay * bz - az * by;
+        double cy = az * bx - ax * bz;
+        double cz = ax * by - ay * bx;
+        double area2 = cx * cx + cy * cy + cz * cz;
+
+        if (area2 < 1e-18) {
+            fprintf(stderr, "校验失败：发现退化三角形，索引 %d\n", i);
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+unsigned int run_grid_validations(int level) {
+    if (!validate_face_count(level)) {
+        return 0;
+    }
+    if (!validate_unique_quadtree_codes()) {
+        return 0;
+    }
+    if (!validate_no_degenerate_faces()) {
+        return 0;
+    }
+
+    printf("格网校验通过：面数、编码唯一性、退化面检查均正常\n");
+    return 1;
 }
 
 // 四叉树编码实现函数
