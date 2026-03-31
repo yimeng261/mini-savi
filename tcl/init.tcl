@@ -84,7 +84,7 @@ proc geomview_init {} {
 
     set grid_flag 0
     set grid_wireframe_flag 0
-    set grid_coverage_flag 1
+    set grid_coverage_flag 0
 
     satellites GV_END
 }

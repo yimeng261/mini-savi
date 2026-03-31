@@ -475,7 +475,9 @@ sats_update()
     project_tracks_reset();
 
   } else if (motion) {
-    fprintf(stderr, "motion------------------------------------");
+    if (debug) {
+      fprintf(stderr, "motion------------------------------------");
+    }
 
     if (computed && !realtime_flag &&
       ((old_ttime != ttime) ||
@@ -483,7 +485,9 @@ sats_update()
       (old_direction != direction))) computed = FALSE;
 
     if (!computed) {
-      fprintf(stderr, "!computed------------------------------------");
+      if (debug) {
+        fprintf(stderr, "!computed------------------------------------");
+      }
 
       if (!realtime_flag || single_step) {
         computed_time = ttime + direction * delta_t;
@@ -512,7 +516,9 @@ sats_update()
       millisleep(1);
 
     } else {
-      fprintf(stderr, "computed!!!------------------------------------");
+      if (debug) {
+        fprintf(stderr, "computed!!!------------------------------------");
+      }
 
       if (!geomview_flag || gv_ready()) {
         set_time(computed_time);

@@ -19,7 +19,7 @@ set grid_wireframe_flag 0
 set latlon_grid_flag 0
 set latlon_grid_wireframe_flag 0
 set grid_level 0
-set grid_coverage_flag 1
+set grid_coverage_flag 0
 set grid_coverage_angle 8.2
 
 # 格网类型：0=二十面体，1=经纬度，2=同时使用两种
@@ -32,6 +32,14 @@ set grid_solid_file ""
 set grid_wireframe_file ""
 set latlon_solid_file ""
 set latlon_wireframe_file ""
+
+proc grid(debug_log) {message} {
+    global debug
+
+    if {[info exists debug] && $debug} {
+        puts stderr $message
+    }
+}
 
 proc grid(on) {} {
     global grid_flag geomview_module grid_solid_file grid_level
@@ -631,7 +639,7 @@ proc grid(apply_grid_type) {} {
 proc grid(update_display) {} {
     global grid_flag grid_wireframe_flag grid_coverage_flag geomview_module
     
-    puts stderr "SaVi: grid(update_display) 被调用，grid_flag=$grid_flag, grid_wireframe_flag=$grid_wireframe_flag, grid_coverage_flag=$grid_coverage_flag"
+    grid(debug_log) "SaVi: grid(update_display) 被调用，grid_flag=$grid_flag, grid_wireframe_flag=$grid_wireframe_flag, grid_coverage_flag=$grid_coverage_flag"
     
     if {![info exists geomview_module] || $geomview_module != 1} {
         puts stderr "SaVi: geomview模块未启用，跳过格网显示更新"
@@ -673,7 +681,7 @@ proc grid_wireframe_off_cmd {} {
 # 菜单中的格网切换函数
 proc grid(toggle_solid) {} {
     global grid_flag
-    puts stderr "SaVi: grid(toggle_solid) 被调用，grid_flag=$grid_flag"
+    grid(debug_log) "SaVi: grid(toggle_solid) 被调用，grid_flag=$grid_flag"
     
     if {$grid_flag == 1} {
         grid(on)
@@ -684,7 +692,7 @@ proc grid(toggle_solid) {} {
 
 proc grid(toggle_wireframe) {} {
     global grid_wireframe_flag
-    puts stderr "SaVi: grid(toggle_wireframe) 被调用，grid_wireframe_flag=$grid_wireframe_flag"
+    grid(debug_log) "SaVi: grid(toggle_wireframe) 被调用，grid_wireframe_flag=$grid_wireframe_flag"
     
     if {$grid_wireframe_flag == 1} {
         grid_wireframe(on)
@@ -697,7 +705,7 @@ proc grid(toggle_wireframe) {} {
 proc grid_coverage(on) {} {
     global grid_level
     
-    puts stderr "SaVi: grid_coverage(on) 被调用 - 使用二十面体格网"
+    grid(debug_log) "SaVi: grid_coverage(on) 被调用 - 使用二十面体格网"
     
     # 初始化格网覆盖系统（二十面体）
     set result [satellites GRID_COVERAGE_ON $grid_level]
@@ -712,8 +720,8 @@ proc grid_coverage(on) {} {
 
 # 格网覆盖功能（经纬度格网）
 proc grid_coverage_latlon(on) {lat_div lon_div} {
-    puts stderr "SaVi: grid_coverage_latlon(on) 被调用 - 使用经纬度格网"
-    puts stderr "SaVi: 纬度划分: $lat_div, 经度划分: $lon_div"
+    grid(debug_log) "SaVi: grid_coverage_latlon(on) 被调用 - 使用经纬度格网"
+    grid(debug_log) "SaVi: 纬度划分: $lat_div, 经度划分: $lon_div"
     
     # 初始化格网覆盖系统（经纬度）
     set result [satellites GRID_COVERAGE_ON_LATLON $lat_div $lon_div]
@@ -727,7 +735,7 @@ proc grid_coverage_latlon(on) {lat_div lon_div} {
 }
 
 proc grid_coverage(off) {} {
-    puts stderr "SaVi: grid_coverage(off) 被调用"
+    grid(debug_log) "SaVi: grid_coverage(off) 被调用"
     
     set result [satellites GRID_COVERAGE_OFF]
     if {$result != "OK"} {
@@ -741,9 +749,9 @@ proc grid_coverage(off) {} {
 
 # 同时使用两种格网的覆盖功能
 proc grid_coverage_both(on) {ico_level lat_div lon_div} {
-    puts stderr "SaVi: grid_coverage_both(on) 被调用"
-    puts stderr "SaVi: 二十面体级别: $ico_level"
-    puts stderr "SaVi: 经纬度划分: ${lat_div}x${lon_div}"
+    grid(debug_log) "SaVi: grid_coverage_both(on) 被调用"
+    grid(debug_log) "SaVi: 二十面体级别: $ico_level"
+    grid(debug_log) "SaVi: 经纬度划分: ${lat_div}x${lon_div}"
     
     # 直接调用GRID_COVERAGE_ON_BOTH命令，一次性加载两种格网
     set result [satellites GRID_COVERAGE_ON_BOTH $ico_level $lat_div $lon_div]
@@ -763,7 +771,7 @@ proc grid_coverage_both(on) {ico_level lat_div lon_div} {
 proc grid(set_coverage_angle) {angle} {
     global grid_coverage_angle
     
-    puts stderr "SaVi: grid(set_coverage_angle) 被调用，angle=$angle"
+    grid(debug_log) "SaVi: grid(set_coverage_angle) 被调用，angle=$angle"
     
     # 验证输入是否为有效数字
     if {![string is double $angle]} {

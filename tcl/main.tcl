@@ -410,8 +410,6 @@ proc main(update) {} {
 
     set n [.main.cmd.lb size]
 
-    puts satellites
-
     #to mini-savi
     if {[catch {set chan [socket 127.0.0.1 12345]} err]} {
         puts stderr "SaVi: mininet服务器未运行，跳过网络集成功能"

@@ -35,7 +35,7 @@ GridCoverage grid_coverage = {0};
 
 /* 默认覆盖角度 - 8.2度（Iridium的实际覆盖角度） */
 #define DEFAULT_COVERAGE_ANGLE_DEG 8.2
-int grid_coverage_enabled = 1;
+int grid_coverage_enabled = 0;
 
 /* Unix Socket相关全局变量 */
 static int socket_fd = -1;
