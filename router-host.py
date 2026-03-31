@@ -148,56 +148,77 @@ class Myserver(socketserver.StreamRequestHandler):
                         print("down******%d%d"%(i,j))
     def calc_ISL_delay(self):
         print("enter calc_ISL_delay()")
-        i = 0
-        j = 0
         c = 300000
         r = 6371.0
         self.ISL_delays = {}
         sats_per_plane = TOPOLOGY["sats_per_plane"]
-        for coor_a in sats_coor_str :
-            id_a = int(sats_coor_str[coor_a][0])
-            x_a = float(sats_coor_str[coor_a][1])
-            y_a = float(sats_coor_str[coor_a][2])
-            z_a = float(sats_coor_str[coor_a][3])
+        sat_entries = []
 
-            self.ISL_delays[id_a-1] = {}  #-1 exclude the sunlight
-            for coor_b in sats_coor_str :
-                id_b = int(sats_coor_str[coor_b][0])
-                x_b = float(sats_coor_str[coor_b][1])
-                y_b = float(sats_coor_str[coor_b][2])
-                z_b = float(sats_coor_str[coor_b][3])
-                self.ISL_delays[id_a-1][id_b-1] = 0
-                #self.ISL_delays[id_b-1][id_a-1] = 0
-                
-                if id_a == id_b :
-                    self.ISL_delays[id_a-1][id_b-1] = 0
-                    #self.ISL_delays[id_b-1][id_a-1] = 0
-                    continue
-                ##https://www.doc88.com/p-0037157447701.html?r=1
-##################################################################################判断是否超过60
-                if sats_per_plane > 0 and (get_latitude(x_a,y_a,z_a)>60 or get_latitude(x_a,y_a,z_a)<-60 or get_latitude(x_b,y_b,z_b)>60 or get_latitude(x_b,y_b,z_b)<-60)and(((id_a-1)//sats_per_plane)!=((id_b-1)//sats_per_plane)):
-                    self.ISL_delays[id_a-1][id_b-1] = 0
-                    #self.ISL_delays[id_b-1][id_a-1] = 0
-                    continue
-##################################################################################
-                t = (x_a*(x_a - x_b) + y_a*(y_a - y_b) + z_a*(z_a - z_b)) / ((x_a - x_b)**2 + (y_a - y_b)**2 + (z_a - z_b)**2)
-                dis_ab = math.sqrt((x_a - x_b)**2 + (y_a - y_b)**2 + (z_a - z_b)**2)
-                if t<0 or t>1:
-                    self.ISL_delays[id_a-1][id_b-1] = dis_ab / c
-                    #self.ISL_delays[id_b-1][id_a-1] = dis_ab / c
+        for key in sats_coor_str:
+            sat_entry = sats_coor_str[key]
+            sat_entries.append({
+                "id": int(sat_entry[0]),
+                "x": float(sat_entry[1]),
+                "y": float(sat_entry[2]),
+                "z": float(sat_entry[3]),
+            })
 
-                elif t >= 0 and t <= 1:
+        sat_entries.sort(key=lambda sat: sat["id"])
+
+        for sat in sat_entries:
+            sat["lat"] = get_latitude(sat["x"], sat["y"], sat["z"])
+            self.ISL_delays[sat["id"] - 1] = {}
+
+        for sat_a in sat_entries:
+            id_a = sat_a["id"] - 1
+            for sat_b in sat_entries:
+                self.ISL_delays[id_a][sat_b["id"] - 1] = 0
+
+        for idx_a, sat_a in enumerate(sat_entries):
+            id_a = sat_a["id"] - 1
+            x_a = sat_a["x"]
+            y_a = sat_a["y"]
+            z_a = sat_a["z"]
+            lat_a = sat_a["lat"]
+
+            for idx_b in range(idx_a + 1, len(sat_entries)):
+                sat_b = sat_entries[idx_b]
+                id_b = sat_b["id"] - 1
+                x_b = sat_b["x"]
+                y_b = sat_b["y"]
+                z_b = sat_b["z"]
+                lat_b = sat_b["lat"]
+                delay = 0
+
+                if sats_per_plane > 0 and (
+                    lat_a > 60 or lat_a < -60 or lat_b > 60 or lat_b < -60
+                ) and ((id_a // sats_per_plane) != (id_b // sats_per_plane)):
+                    self.ISL_delays[id_a][id_b] = 0
+                    self.ISL_delays[id_b][id_a] = 0
+                    continue
+
+                delta_x = x_a - x_b
+                delta_y = y_a - y_b
+                delta_z = z_a - z_b
+                delta_sq = delta_x ** 2 + delta_y ** 2 + delta_z ** 2
+                if delta_sq == 0:
+                    continue
+
+                t = (x_a * delta_x + y_a * delta_y + z_a * delta_z) / delta_sq
+                dis_ab = math.sqrt(delta_sq)
+                if t < 0 or t > 1:
+                    delay = dis_ab / c
+                else:
                     x_min = x_a + t * (x_b - x_a)
                     y_min = y_a + t * (y_b - y_a)
                     z_min = z_a + t * (z_b - z_a)
 
-                    dis_min_abo = math.sqrt(x_min**2 + y_min**2 + z_min**2)
-                    if (r < dis_min_abo) :
-                        self.ISL_delays[id_a-1][id_b-1] = dis_ab / c
-                        #self.ISL_delays[id_b-1][id_a-1] = dis_ab / c
-                    else :
-                        self.ISL_delays[id_a-1][id_b-1] = 0
-                        #self.ISL_delays[id_b-1][id_a-1] = 0
+                    dis_min_abo = math.sqrt(x_min ** 2 + y_min ** 2 + z_min ** 2)
+                    if r < dis_min_abo:
+                        delay = dis_ab / c
+
+                self.ISL_delays[id_a][id_b] = delay
+                self.ISL_delays[id_b][id_a] = delay
 
 
         #print("---------------print self.ISL_delays---------------------")

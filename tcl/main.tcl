@@ -416,7 +416,6 @@ proc main(update) {} {
         set chan ""
     } else {
         puts $chan "constellation import start"
-        flush $chan
     }
 
     while {[satellites GET $i] != ""} {
@@ -444,7 +443,7 @@ proc main(update) {} {
     coverage(update)
 }
 
-proc main(update_field) {i chan} {
+proc main(update_field) {i {chan ""}} {
 
     set noe [satellites GET $i]
     set name [satellites GET_NAME $i]
@@ -469,7 +468,6 @@ proc main(update_field) {i chan} {
     #to mini-savi
     if {$chan != ""} {
         puts $chan $line
-        flush $chan
     }
 }
 
