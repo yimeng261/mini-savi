@@ -74,12 +74,42 @@ static Constellation constellation = { 0, 0, 0, (Satellite_list) NULL, &CB };
 static double ttime = 0.0;
 static unsigned int realtime_flag = FALSE;
 static double realtime = 0;
+static char *mininet_payload_buffer = NULL;
+static size_t mininet_payload_capacity = 0;
 
 static Satellite sats_n(int n);
 static char OK_str[] = "OK";
 
+static unsigned int ensure_mininet_payload_capacity(size_t min_capacity);
+
 static const int Forward = 1.0;
 static const int Backward = -1.0;
+
+static unsigned int
+ensure_mininet_payload_capacity(size_t min_capacity)
+{
+  char *new_buffer;
+  size_t new_capacity;
+
+  if (mininet_payload_capacity >= min_capacity) {
+    return TRUE;
+  }
+
+  new_capacity = mininet_payload_capacity ? mininet_payload_capacity : 256;
+  while (new_capacity < min_capacity) {
+    new_capacity *= 2;
+  }
+
+  new_buffer = (char *) realloc(mininet_payload_buffer, new_capacity);
+  if (!new_buffer) {
+    error("failed to grow mininet socket payload buffer.");
+    return FALSE;
+  }
+
+  mininet_payload_buffer = new_buffer;
+  mininet_payload_capacity = new_capacity;
+  return TRUE;
+}
 
 /*
  * forwards_cmd
@@ -344,8 +374,6 @@ void send_sats_coor()
 {
   static unsigned long update_counter = 0;
   size_t payload_len = 0;
-  size_t payload_cap = 0;
-  char *payload = NULL;
   int offset = 0;
   Satellite_list sl;
 
@@ -358,40 +386,28 @@ void send_sats_coor()
     return;
   }
 
-  payload_cap = ((constellation.n_sats ? constellation.n_sats : 1) * 96) + 1;
-  payload = (char *) malloc(payload_cap);
-  if (!payload) {
-    error("failed to allocate mininet socket payload buffer.");
+  if (!ensure_mininet_payload_capacity(
+	  ((constellation.n_sats ? constellation.n_sats : 1) * 96) + 1)) {
     return;
   }
-  payload[0] = '\0';
+  mininet_payload_buffer[0] = '\0';
 
   sl = constellation.satellites;
   while (sl) {
     int written;
     size_t remaining;
 
-    if (payload_len + 128 >= payload_cap) {
-      char *grown_payload;
-
-      payload_cap *= 2;
-      grown_payload = (char *) realloc(payload, payload_cap);
-      if (!grown_payload) {
-	error("failed to grow mininet socket payload buffer.");
-	free(payload);
-	return;
-      }
-      payload = grown_payload;
+    if (!ensure_mininet_payload_capacity(payload_len + 128)) {
+      return;
     }
 
-    remaining = payload_cap - payload_len;
-    written = snprintf(payload + payload_len, remaining,
+    remaining = mininet_payload_capacity - payload_len;
+    written = snprintf(mininet_payload_buffer + payload_len, remaining,
 		       "%d, %lf, %lf, %lf, %s, %d\r\n",
 		       sl->s->id, sl->s->x_C.x, sl->s->x_C.y, sl->s->x_C.z,
 		       sl->s->name, offset);
     if (written < 0 || (size_t) written >= remaining) {
       error("failed to serialize mininet satellite coordinates.");
-      free(payload);
       return;
     }
 
@@ -401,13 +417,10 @@ void send_sats_coor()
   }
 
   if (!mininet_socket_send("ISL info start\r\n") ||
-      !mininet_socket_send_n(payload, payload_len) ||
+      !mininet_socket_send_n(mininet_payload_buffer, payload_len) ||
       !mininet_socket_send("ISL info end\r\n")) {
-    free(payload);
     return;
   }
-
-  free(payload);
 }
 
 /*
