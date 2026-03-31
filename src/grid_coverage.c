@@ -52,6 +52,15 @@ static unsigned int grid_coverage_socket_send_codes(int satellite_id,
                                                     const GridCell *cells,
                                                     int cell_count,
                                                     unsigned int use_icosahedral);
+static unsigned int grid_coverage_validate_ico_metadata(const char *base_filename,
+                                                        int level,
+                                                        int vertex_count,
+                                                        int face_count);
+static unsigned int grid_coverage_validate_latlon_metadata(const char *base_filename,
+                                                           int lat_divisions,
+                                                           int lon_divisions,
+                                                           int vertex_count,
+                                                           int face_count);
 
 typedef struct {
     double sat_x;
@@ -67,6 +76,17 @@ typedef struct {
     unsigned int requires_horizon_check;
     unsigned int valid;
 } SatelliteCoverageContext;
+
+typedef struct {
+    char grid_type[32];
+    int grid_level;
+    int lat_divisions;
+    int lon_divisions;
+    int vertex_count;
+    int face_count;
+    int rectangle_count;
+    int triangle_count;
+} GridMetadata;
 
 static void satellite_coverage_context_init(const Satellite sat,
                                            double coverage_angle,
@@ -88,6 +108,8 @@ static int collect_coverage_for_cells(const GridCell *cells,
                                       int *max_coverage,
                                       const char *grid_kind,
                                       int satellite_id);
+static unsigned int load_grid_metadata_file(const char *metadata_path,
+                                            GridMetadata *metadata);
 
 /*
  * grid_coverage_init
@@ -225,6 +247,7 @@ void grid_coverage_cleanup(void) {
  * 从OOGL文件加载格网数据并转换为地表坐标
  */
 int grid_coverage_load_from_file(int level) {
+    char base_filename[128];
     char filename[256];
     FILE *fp;
     char line[512];
@@ -233,7 +256,8 @@ int grid_coverage_load_from_file(int level) {
     int face_id = 0;
     
     // 构建文件路径
-    snprintf(filename, sizeof(filename), "./mini-savi/icosahedral_grid_level_%d.oogl", level);
+    snprintf(base_filename, sizeof(base_filename), "icosahedral_grid_level_%d", level);
+    snprintf(filename, sizeof(filename), "./mini-savi/%s.oogl", base_filename);
     fprintf(stderr, "Attempting to load grid file: %s\n", filename);
     
     fp = fopen(filename, "r");
@@ -253,6 +277,12 @@ int grid_coverage_load_from_file(int level) {
     if (!fgets(line, sizeof(line), fp) || 
         sscanf(line, "%d %d %*d", &vertex_count, &face_count) != 2) {
         fprintf(stderr, "Failed to read vertex/face counts from %s\n", filename);
+        fclose(fp);
+        return 0;
+    }
+
+    if (!grid_coverage_validate_ico_metadata(base_filename, level,
+                                             vertex_count, face_count)) {
         fclose(fp);
         return 0;
     }
@@ -374,6 +404,7 @@ int grid_coverage_load_from_file(int level) {
  * 从OOGL文件加载经纬度格网数据
  */
 int grid_coverage_load_latlon_from_file(int lat_divisions, int lon_divisions) {
+    char base_filename[128];
     char filename[256];
     FILE *fp;
     char line[512];
@@ -381,8 +412,10 @@ int grid_coverage_load_latlon_from_file(int lat_divisions, int lon_divisions) {
     double (*vertices)[3] = NULL;
     
     // 构建文件路径
-    snprintf(filename, sizeof(filename), "./mini-savi/latlon_grid_%dx%d.oogl", 
+    snprintf(base_filename, sizeof(base_filename), "latlon_grid_%dx%d",
              lat_divisions, lon_divisions);
+    snprintf(filename, sizeof(filename), "./mini-savi/%s.oogl", 
+             base_filename);
     fprintf(stderr, "Attempting to load latlon grid file: %s\n", filename);
     
     fp = fopen(filename, "r");
@@ -403,6 +436,13 @@ int grid_coverage_load_latlon_from_file(int lat_divisions, int lon_divisions) {
     if (!fgets(line, sizeof(line), fp) || 
         sscanf(line, "%d %d %*d", &vertex_count, &face_count) != 2) {
         fprintf(stderr, "Failed to read vertex/face counts from %s\n", filename);
+        fclose(fp);
+        return 0;
+    }
+
+    if (!grid_coverage_validate_latlon_metadata(base_filename, lat_divisions,
+                                                lon_divisions, vertex_count,
+                                                face_count)) {
         fclose(fp);
         return 0;
     }
@@ -701,6 +741,100 @@ collect_coverage_for_cells(const GridCell *cells, int cell_count,
     }
 
     return added;
+}
+
+static unsigned int
+load_grid_metadata_file(const char *metadata_path, GridMetadata *metadata) {
+    FILE *fp;
+    char line[256];
+
+    memset(metadata, 0, sizeof(*metadata));
+    fp = fopen(metadata_path, "r");
+    if (!fp) {
+        return FALSE;
+    }
+
+    while (fgets(line, sizeof(line), fp)) {
+        if (sscanf(line, " \"grid_type\": \"%31[^\"]\"", metadata->grid_type) == 1) {
+            continue;
+        }
+        if (sscanf(line, " \"grid_level\": %d", &metadata->grid_level) == 1) {
+            continue;
+        }
+        if (sscanf(line, " \"lat_divisions\": %d", &metadata->lat_divisions) == 1) {
+            continue;
+        }
+        if (sscanf(line, " \"lon_divisions\": %d", &metadata->lon_divisions) == 1) {
+            continue;
+        }
+        if (sscanf(line, " \"vertex_count\": %d", &metadata->vertex_count) == 1) {
+            continue;
+        }
+        if (sscanf(line, " \"face_count\": %d", &metadata->face_count) == 1) {
+            continue;
+        }
+        if (sscanf(line, " \"rectangle_count\": %d", &metadata->rectangle_count) == 1) {
+            continue;
+        }
+        if (sscanf(line, " \"triangle_count\": %d", &metadata->triangle_count) == 1) {
+            continue;
+        }
+    }
+
+    fclose(fp);
+    return TRUE;
+}
+
+static unsigned int
+grid_coverage_validate_ico_metadata(const char *base_filename, int level,
+                                    int vertex_count, int face_count) {
+    char metadata_path[256];
+    GridMetadata metadata;
+
+    snprintf(metadata_path, sizeof(metadata_path), "./mini-savi/%s.json",
+             base_filename);
+    if (!load_grid_metadata_file(metadata_path, &metadata)) {
+        fprintf(stderr, "Grid metadata missing for %s, continuing without validation\n",
+                base_filename);
+        return TRUE;
+    }
+
+    if (strcmp(metadata.grid_type, "icosahedral") != 0 ||
+        metadata.grid_level != level ||
+        metadata.vertex_count != vertex_count ||
+        metadata.face_count != face_count) {
+        fprintf(stderr, "Grid metadata mismatch for %s\n", base_filename);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static unsigned int
+grid_coverage_validate_latlon_metadata(const char *base_filename,
+                                       int lat_divisions, int lon_divisions,
+                                       int vertex_count, int face_count) {
+    char metadata_path[256];
+    GridMetadata metadata;
+
+    snprintf(metadata_path, sizeof(metadata_path), "./mini-savi/%s.json",
+             base_filename);
+    if (!load_grid_metadata_file(metadata_path, &metadata)) {
+        fprintf(stderr, "Grid metadata missing for %s, continuing without validation\n",
+                base_filename);
+        return TRUE;
+    }
+
+    if (strcmp(metadata.grid_type, "latlon") != 0 ||
+        metadata.lat_divisions != lat_divisions ||
+        metadata.lon_divisions != lon_divisions ||
+        metadata.vertex_count != vertex_count ||
+        metadata.triangle_count != face_count) {
+        fprintf(stderr, "LatLon grid metadata mismatch for %s\n", base_filename);
+        return FALSE;
+    }
+
+    return TRUE;
 }
 
 /*

@@ -79,6 +79,7 @@ GridMesh grid_mesh = {0};
 
 // 函数声明
 int add_vertex_xyz(double x, double y, double z);
+void write_grid_metadata(const char *base_filename);
 
 // 四叉树编码函数声明
 void quadtree_encode_face(QuadtreeCode *code, int base_face_id, int level, int face_index_in_level);
@@ -497,6 +498,32 @@ void write_oogl_grid(const char* filename) {
     printf("生成OOGL格网文件: %s\n", path);
 }
 
+void write_grid_metadata(const char *base_filename) {
+    char path[200];
+    FILE *fp;
+
+    snprintf(path, sizeof(path), "%s%s.json", FILEPATH, base_filename);
+    fp = fopen(path, "w");
+    if (!fp) {
+        printf("无法创建元数据文件: %s\n", path);
+        return;
+    }
+
+    fprintf(fp, "{\n");
+    fprintf(fp, "  \"grid_type\": \"icosahedral\",\n");
+    fprintf(fp, "  \"grid_level\": %d,\n", grid_mesh.grid_level);
+    fprintf(fp, "  \"vertex_count\": %d,\n", grid_mesh.vertex_count);
+    fprintf(fp, "  \"face_count\": %d,\n", grid_mesh.face_count);
+    fprintf(fp, "  \"cell_count\": %d,\n", grid_mesh.face_count);
+    fprintf(fp, "  \"display_radius\": 1.05,\n");
+    fprintf(fp, "  \"solid_file\": \"%s.oogl\",\n", base_filename);
+    fprintf(fp, "  \"wireframe_file\": \"%s_wireframe.oogl\"\n", base_filename);
+    fprintf(fp, "}\n");
+
+    fclose(fp);
+    printf("元数据文件：%s\n", path);
+}
+
 // 创建线框格网的OOGL文件
 void write_oogl_wireframe(const char* filename) {
     char path[200];
@@ -662,10 +689,12 @@ int main(int argc, char* argv[])
     // 输出OOGL格式文件
     write_oogl_grid(filename);
     write_oogl_wireframe(filename);
+    write_grid_metadata(filename);
     
     printf("\n格网文件已生成到 %s 目录\n", FILEPATH);
     printf("实体格网文件：%s.oogl\n", filename);
     printf("线框格网文件：%s_wireframe.oogl\n", filename);
+    printf("元数据文件：%s.json\n", filename);
     
     // 释放内存
     free_grid_mesh();
@@ -783,4 +812,3 @@ void assign_quadtree_codes_to_faces(int level) {
     
     printf("四叉树编码分配完成，共 %d 个格网面\n", grid_mesh.face_count);
 }
-

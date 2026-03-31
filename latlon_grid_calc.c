@@ -30,6 +30,8 @@ typedef struct {
 
 LatLonGridMesh grid_mesh = {0};
 
+void write_grid_metadata(const char *base_filename);
+
 // 初始化网格内存
 int init_grid_mesh(int max_vertices, int max_faces) {
     grid_mesh.vertices = malloc(max_vertices * sizeof(double[3]));
@@ -309,6 +311,33 @@ void write_oogl_wireframe(const char *base_filename) {
     printf("生成OOGL线框文件: %s\n", path);
 }
 
+void write_grid_metadata(const char *base_filename) {
+    char path[256];
+    FILE *fp;
+
+    snprintf(path, sizeof(path), "%s%s.json", FILEPATH, base_filename);
+    fp = fopen(path, "w");
+    if (!fp) {
+        printf("无法创建元数据文件: %s\n", path);
+        return;
+    }
+
+    fprintf(fp, "{\n");
+    fprintf(fp, "  \"grid_type\": \"latlon\",\n");
+    fprintf(fp, "  \"lat_divisions\": %d,\n", grid_mesh.lat_divisions);
+    fprintf(fp, "  \"lon_divisions\": %d,\n", grid_mesh.lon_divisions);
+    fprintf(fp, "  \"vertex_count\": %d,\n", grid_mesh.vertex_count);
+    fprintf(fp, "  \"rectangle_count\": %d,\n", grid_mesh.face_count);
+    fprintf(fp, "  \"triangle_count\": %d,\n", grid_mesh.face_count * 2);
+    fprintf(fp, "  \"display_radius\": 1.05,\n");
+    fprintf(fp, "  \"solid_file\": \"%s.oogl\",\n", base_filename);
+    fprintf(fp, "  \"wireframe_file\": \"%s_wireframe.oogl\"\n", base_filename);
+    fprintf(fp, "}\n");
+
+    fclose(fp);
+    printf("生成元数据文件: %s\n", path);
+}
+
 int main(int argc, char* argv[]) {
     int lat_divisions, lon_divisions;
     
@@ -363,6 +392,7 @@ int main(int argc, char* argv[]) {
     // 输出OOGL格式文件
     write_oogl_grid(filename);
     write_oogl_wireframe(filename);
+    write_grid_metadata(filename);
     
     // 清理内存
     free_grid_mesh();
@@ -370,7 +400,7 @@ int main(int argc, char* argv[]) {
     printf("\n完成！文件保存在 %s 目录下\n", FILEPATH);
     printf("  - %s.oogl (格网文件)\n", filename);
     printf("  - %s_wireframe.oogl (线框文件)\n", filename);
+    printf("  - %s.json (元数据文件)\n", filename);
     
     return 0;
 }
-
