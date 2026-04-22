@@ -374,7 +374,6 @@ void send_sats_coor()
 {
   static unsigned long update_counter = 0;
   size_t payload_len = 0;
-  int offset = 0;
   Satellite_list sl;
 
   if (!mininet_socket_is_available()) {
@@ -403,16 +402,15 @@ void send_sats_coor()
 
     remaining = mininet_payload_capacity - payload_len;
     written = snprintf(mininet_payload_buffer + payload_len, remaining,
-		       "%d, %lf, %lf, %lf, %s, %d\r\n",
+		       "%d, %lf, %lf, %lf, %s\r\n",
 		       sl->s->id, sl->s->x_C.x, sl->s->x_C.y, sl->s->x_C.z,
-		       sl->s->name, offset);
+		       sl->s->name);
     if (written < 0 || (size_t) written >= remaining) {
       error("failed to serialize mininet satellite coordinates.");
       return;
     }
 
     payload_len += (size_t) written;
-    offset += written;
     sl = sl->next;
   }
 
@@ -521,6 +519,7 @@ sats_update()
 
       coverage_decay();
       coverage_compute(constellation.satellites, FALSE, constellation.pcb);
+      grid_coverage_compute(constellation.satellites, constellation.pcb);
       tracks_compute(constellation.satellites, constellation.pcb);
       
       computed = TRUE;
@@ -566,9 +565,6 @@ sats_update()
           single_step = FALSE;
           motion = FALSE;
         }
-
-        // 计算格网覆盖（无论是否重新计算卫星位置）
-        grid_coverage_compute(constellation.satellites, constellation.pcb);
 
         computed = FALSE;
       }

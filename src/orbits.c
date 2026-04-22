@@ -247,7 +247,6 @@ write_orbits_geom(const Constellation * pconstellation)
     while (sl) {
       if (sl->s->can_display_orbit) {
         fprintf(gv_out, ":orbit_%d\n", sl->s->id);
-        printf(":orbit_%d\n", sl->s->id);
       }
       sl = sl->next;
     }

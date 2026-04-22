@@ -630,7 +630,8 @@ total_coverage(int projection_type, int output, grid *g)
   case CYLINDRICAL:
   case UNPROJECTED:
   default:
-    /* is this correct for UNPROJECTED? */
+    /* UNPROJECTED is equirectangular: each pixel spans equal angular area,
+       so the same formula as CYLINDRICAL applies. */
     cov = 100.0*g->count/g->height/g->width;
   }
 

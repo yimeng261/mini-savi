@@ -53,12 +53,15 @@ dkms.conf
 
 savi
 bin/SaVi
-bin/SaVi-linux.bin
+bin/SaVi-*.bin
 src/version.c
 tcl/mkindex.tcl
 tcl/tclIndex
+generated/*
 
 __pycache__/
+
+.vscode/
 
 outputs/*
 !outputs/.gitkeep
@@ -69,4 +72,6 @@ outputs/experiments/*
 outputs/runtime/*
 !outputs/runtime/.gitkeep
 
+tools/grid_calc
+tools/latlon_grid_calc
 tools/quick_test.sh

@@ -33,6 +33,62 @@ typedef struct {
 LatLonGridMesh grid_mesh = {0};
 static char output_dir[256] = DEFAULT_FILEPATH;
 
+/* Spatial hash table for O(1) vertex deduplication */
+#define VERTEX_HASH_EMPTY -1
+
+typedef struct {
+    int *table;
+    int capacity;
+    int mask;
+} VertexHashTable;
+
+static VertexHashTable vertex_ht = {0};
+
+typedef struct {
+    int v1;
+    int v2;
+} Edge;
+
+static void vertex_ht_init(int expected_count) {
+    int cap = 1;
+    while (cap < expected_count * 4) cap <<= 1;
+    vertex_ht.capacity = cap;
+    vertex_ht.mask = cap - 1;
+    vertex_ht.table = malloc(cap * sizeof(int));
+    for (int i = 0; i < cap; i++) vertex_ht.table[i] = VERTEX_HASH_EMPTY;
+}
+
+static void vertex_ht_free(void) {
+    if (vertex_ht.table) {
+        free(vertex_ht.table);
+        vertex_ht.table = NULL;
+    }
+}
+
+static int vertex_ht_find_or_insert(double x, double y, double z, int new_idx) {
+    int ix = (int)(x * 1e5 + (x >= 0 ? 0.5 : -0.5));
+    int iy = (int)(y * 1e5 + (y >= 0 ? 0.5 : -0.5));
+    int iz = (int)(z * 1e5 + (z >= 0 ? 0.5 : -0.5));
+    unsigned int h = ((unsigned int)ix * 73856093u ^
+                      (unsigned int)iy * 19349663u ^
+                      (unsigned int)iz * 83492791u) & vertex_ht.mask;
+
+    while (1) {
+        int idx = vertex_ht.table[h];
+        if (idx == VERTEX_HASH_EMPTY) {
+            vertex_ht.table[h] = new_idx;
+            return VERTEX_HASH_EMPTY;
+        }
+        double dx = grid_mesh.vertices[idx][0] - x;
+        double dy = grid_mesh.vertices[idx][1] - y;
+        double dz = grid_mesh.vertices[idx][2] - z;
+        if (dx*dx + dy*dy + dz*dz < 1e-18) {
+            return idx;
+        }
+        h = (h + 1) & vertex_ht.mask;
+    }
+}
+
 void write_grid_metadata(const char *base_filename);
 int parse_args(int argc, char *argv[], int *lat_divisions, int *lon_divisions);
 void print_usage(const char *progname);
@@ -41,6 +97,7 @@ unsigned int validate_rectangle_count(int lat_divisions, int lon_divisions);
 unsigned int validate_unique_latlon_codes(void);
 unsigned int validate_no_degenerate_faces(void);
 unsigned int run_grid_validations(int lat_divisions, int lon_divisions);
+static int compare_edges(const void *a, const void *b);
 
 // 初始化网格内存
 int init_grid_mesh(int max_vertices, int max_faces) {
@@ -86,28 +143,37 @@ void latlon_to_xyz(double lat_deg, double lon_deg, double *x, double *y, double 
 
 // 添加顶点（如果不存在则添加，返回索引）
 int add_vertex(double x, double y, double z) {
-    // 检查是否已存在（容差1e-9）
-    for (int i = 0; i < grid_mesh.vertex_count; i++) {
-        double dx = grid_mesh.vertices[i][0] - x;
-        double dy = grid_mesh.vertices[i][1] - y;
-        double dz = grid_mesh.vertices[i][2] - z;
-        if (dx*dx + dy*dy + dz*dz < 1e-18) {
-            return i; // 顶点已存在
-        }
-    }
-    
-    // 添加新顶点
+    // 检查容量
     if (grid_mesh.vertex_count >= grid_mesh.max_vertices) {
         printf("警告：顶点数量超过最大值！\n");
         return -1;
     }
-    
+
+    // 使用哈希表查找或插入
+    if (vertex_ht.table) {
+        int found = vertex_ht_find_or_insert(x, y, z, grid_mesh.vertex_count);
+        if (found != VERTEX_HASH_EMPTY) {
+            return found;
+        }
+    } else {
+        // 回退到线性扫描
+        for (int i = 0; i < grid_mesh.vertex_count; i++) {
+            double dx = grid_mesh.vertices[i][0] - x;
+            double dy = grid_mesh.vertices[i][1] - y;
+            double dz = grid_mesh.vertices[i][2] - z;
+            if (dx*dx + dy*dy + dz*dz < 1e-18) {
+                return i;
+            }
+        }
+    }
+
+    // 添加新顶点
     int idx = grid_mesh.vertex_count;
     grid_mesh.vertices[idx][0] = x;
     grid_mesh.vertices[idx][1] = y;
     grid_mesh.vertices[idx][2] = z;
     grid_mesh.vertex_count++;
-    
+
     return idx;
 }
 
@@ -244,81 +310,79 @@ void write_oogl_wireframe(const char *base_filename) {
         return;
     }
     
-    // OOGL线框文件头
-    fprintf(fp, "VECT\n");
-    
-    // 统计边的数量（每个矩形有4条边，但边会被共享）
-    // 简化处理：每个矩形输出4条边
-    int edge_count = grid_mesh.face_count * 4;
-    
-    // 边的数量 顶点总数 颜色数
-    fprintf(fp, "%d %d 0\n", edge_count, edge_count * 2);
-    
-    // 每条边的顶点数（都是2）
-    for (int i = 0; i < edge_count; i++) {
-        fprintf(fp, "2 ");
-        if ((i + 1) % 20 == 0) fprintf(fp, "\n");
+    int max_edges = grid_mesh.face_count * 4;
+    Edge *edges = malloc(max_edges * sizeof(Edge));
+    int edge_count = 0;
+
+    if (!edges) {
+        fclose(fp);
+        printf("无法分配边数组内存！\n");
+        return;
     }
-    if (edge_count % 20 != 0) fprintf(fp, "\n");
-    
-    // 每条边的颜色数（都是0，使用默认颜色）
-    for (int i = 0; i < edge_count; i++) {
-        fprintf(fp, "0 ");
-        if ((i + 1) % 20 == 0) fprintf(fp, "\n");
-    }
-    if (edge_count % 20 != 0) fprintf(fp, "\n");
-    
-    // 输出边的顶点坐标和索引
+
     for (int i = 0; i < grid_mesh.face_count; i++) {
-        int v1 = grid_mesh.faces[i][0];
-        int v2 = grid_mesh.faces[i][1];
-        int v3 = grid_mesh.faces[i][2];
-        int v4 = grid_mesh.faces[i][3];
-        
-        // 四条边: v1-v2, v2-v3, v3-v4, v4-v1
-        // 边1: v1-v2
-        fprintf(fp, "%.6f %.6f %.6f\n", 
-                grid_mesh.vertices[v1][0] * 1.05,
-                grid_mesh.vertices[v1][1] * 1.05,
-                grid_mesh.vertices[v1][2] * 1.05);
-        fprintf(fp, "%.6f %.6f %.6f\n", 
-                grid_mesh.vertices[v2][0] * 1.05,
-                grid_mesh.vertices[v2][1] * 1.05,
-                grid_mesh.vertices[v2][2] * 1.05);
-        
-        // 边2: v2-v3
-        fprintf(fp, "%.6f %.6f %.6f\n", 
-                grid_mesh.vertices[v2][0] * 1.05,
-                grid_mesh.vertices[v2][1] * 1.05,
-                grid_mesh.vertices[v2][2] * 1.05);
-        fprintf(fp, "%.6f %.6f %.6f\n", 
-                grid_mesh.vertices[v3][0] * 1.05,
-                grid_mesh.vertices[v3][1] * 1.05,
-                grid_mesh.vertices[v3][2] * 1.05);
-        
-        // 边3: v3-v4
-        fprintf(fp, "%.6f %.6f %.6f\n", 
-                grid_mesh.vertices[v3][0] * 1.05,
-                grid_mesh.vertices[v3][1] * 1.05,
-                grid_mesh.vertices[v3][2] * 1.05);
-        fprintf(fp, "%.6f %.6f %.6f\n", 
-                grid_mesh.vertices[v4][0] * 1.05,
-                grid_mesh.vertices[v4][1] * 1.05,
-                grid_mesh.vertices[v4][2] * 1.05);
-        
-        // 边4: v4-v1
-        fprintf(fp, "%.6f %.6f %.6f\n", 
-                grid_mesh.vertices[v4][0] * 1.05,
-                grid_mesh.vertices[v4][1] * 1.05,
-                grid_mesh.vertices[v4][2] * 1.05);
-        fprintf(fp, "%.6f %.6f %.6f\n", 
-                grid_mesh.vertices[v1][0] * 1.05,
-                grid_mesh.vertices[v1][1] * 1.05,
-                grid_mesh.vertices[v1][2] * 1.05);
+        int face_vertices[4];
+
+        for (int j = 0; j < 4; j++) {
+            face_vertices[j] = grid_mesh.faces[i][j];
+        }
+
+        for (int j = 0; j < 4; j++) {
+            int v1 = face_vertices[j];
+            int v2 = face_vertices[(j + 1) % 4];
+
+            if (v1 == v2) {
+                continue;
+            }
+            if (v1 > v2) {
+                int tmp = v1;
+                v1 = v2;
+                v2 = tmp;
+            }
+
+            edges[edge_count].v1 = v1;
+            edges[edge_count].v2 = v2;
+            edge_count++;
+        }
+    }
+
+    qsort(edges, edge_count, sizeof(Edge), compare_edges);
+
+    {
+        int unique = 0;
+        for (int i = 0; i < edge_count; i++) {
+            if (i == 0 ||
+                edges[i].v1 != edges[i - 1].v1 ||
+                edges[i].v2 != edges[i - 1].v2) {
+                edges[unique++] = edges[i];
+            }
+        }
+        edge_count = unique;
+    }
+
+    fprintf(fp, "# LatLon grid wireframe\n");
+    fprintf(fp, "appearance {\n");
+    fprintf(fp, "    material { diffuse 0.8 0.8 0.2 alpha 0.9 }\n");
+    fprintf(fp, "    linewidth 2\n");
+    fprintf(fp, "}\n");
+    fprintf(fp, "SKEL\n");
+    fprintf(fp, "%d %d\n", grid_mesh.vertex_count, edge_count);
+
+    for (int i = 0; i < grid_mesh.vertex_count; i++) {
+        fprintf(fp, "%.6f %.6f %.6f\n",
+                grid_mesh.vertices[i][0] * 1.05,
+                grid_mesh.vertices[i][1] * 1.05,
+                grid_mesh.vertices[i][2] * 1.05);
+    }
+
+    for (int i = 0; i < edge_count; i++) {
+        fprintf(fp, "2 %d %d\n", edges[i].v1, edges[i].v2);
     }
     
     fclose(fp);
+    free(edges);
     printf("生成OOGL线框文件: %s\n", path);
+    printf("  唯一边数: %d\n", edge_count);
 }
 
 void write_grid_metadata(const char *base_filename) {
@@ -380,6 +444,8 @@ int main(int argc, char* argv[]) {
         printf("内存初始化失败！\n");
         return 1;
     }
+
+    vertex_ht_init(estimated_vertices);
     
     printf("\n正在生成格网...\n");
     generate_latlon_grid(lat_divisions, lon_divisions);
@@ -405,6 +471,7 @@ int main(int argc, char* argv[]) {
     write_grid_metadata(filename);
     
     // 清理内存
+    vertex_ht_free();
     free_grid_mesh();
     
     printf("\n完成！文件保存在 %s 目录下\n", output_dir);
@@ -497,18 +564,36 @@ unsigned int validate_rectangle_count(int lat_divisions, int lon_divisions) {
     return 1;
 }
 
+static int compare_latlon_code_strings(const void *a, const void *b) {
+    const LatLonCode *ca = (const LatLonCode *)a;
+    const LatLonCode *cb = (const LatLonCode *)b;
+    return strcmp(ca->code_string, cb->code_string);
+}
+
+static int compare_edges(const void *a, const void *b) {
+    const Edge *ea = (const Edge *)a;
+    const Edge *eb = (const Edge *)b;
+
+    if (ea->v1 != eb->v1) {
+        return ea->v1 - eb->v1;
+    }
+    return ea->v2 - eb->v2;
+}
+
 unsigned int validate_unique_latlon_codes(void) {
-    for (int i = 0; i < grid_mesh.face_count; i++) {
-        for (int j = i + 1; j < grid_mesh.face_count; j++) {
-            if (strcmp(grid_mesh.face_codes[i].code_string,
-                       grid_mesh.face_codes[j].code_string) == 0) {
-                fprintf(stderr, "校验失败：发现重复编码 %s\n",
-                        grid_mesh.face_codes[i].code_string);
-                return 0;
-            }
+    LatLonCode *sorted = malloc(grid_mesh.face_count * sizeof(LatLonCode));
+    if (!sorted) return 0;
+    memcpy(sorted, grid_mesh.face_codes, grid_mesh.face_count * sizeof(LatLonCode));
+    qsort(sorted, grid_mesh.face_count, sizeof(LatLonCode), compare_latlon_code_strings);
+
+    for (int i = 1; i < grid_mesh.face_count; i++) {
+        if (strcmp(sorted[i-1].code_string, sorted[i].code_string) == 0) {
+            fprintf(stderr, "校验失败：发现重复编码 %s\n", sorted[i].code_string);
+            free(sorted);
+            return 0;
         }
     }
-
+    free(sorted);
     return 1;
 }
 

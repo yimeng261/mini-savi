@@ -4,6 +4,7 @@ Unix Socket接收器：监听Unix socket接收格网覆盖数据
 支持二十面体和经纬度两种格网类型
 实现贪心算法选择卫星覆盖
 将数据保存到文件供后续分析
+支持将覆盖数据实时注入 FRR isisd（通过 coverage_injector）
 """
 
 import socket
@@ -13,11 +14,14 @@ import time
 import json
 import pickle
 import re
+import heapq
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 from enum import Enum
+
+from coverage_injector import CoverageInjector
 
 class GridType(Enum):
     """格网类型"""
@@ -91,6 +95,54 @@ def detect_grid_level(grid_count: int, grid_type: GridType) -> str:
 FRAGMENT_RE = re.compile(r"^(?P<sat_id>[^@]+)@(?P<index>\d+)/(?P<total>\d+)$")
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parents[1] / "outputs" / "experiments"
 
+# 二进制协议常量
+import struct
+GCOV_MSG_FULL  = 0x01
+GCOV_MSG_DELTA = 0x02
+GCOV_BINARY_HDR_FORMAT = '<BHIIhh'  # msg_type, sat_id, seq, ts, add_cnt, rm_cnt
+GCOV_BINARY_HDR_SIZE = struct.calcsize(GCOV_BINARY_HDR_FORMAT)
+
+# 每颗卫星的增量状态追踪
+_binary_state: Dict[str, set] = {}  # sat_id -> set of grid_codes
+
+
+def process_binary_message(data: bytes, analyzer) -> bool:
+    """解析二进制覆盖消息，支持全量和增量模式。"""
+    if len(data) < GCOV_BINARY_HDR_SIZE:
+        return False
+
+    msg_type, sat_id, seq, ts, add_count, remove_count = struct.unpack_from(
+        GCOV_BINARY_HDR_FORMAT, data
+    )
+
+    expected_len = GCOV_BINARY_HDR_SIZE + (add_count + remove_count) * 4
+    if len(data) < expected_len:
+        return False
+
+    offset = GCOV_BINARY_HDR_SIZE
+    add_codes = struct.unpack_from(f'<{add_count}I', data, offset) if add_count else ()
+    offset += add_count * 4
+    rm_codes = struct.unpack_from(f'<{remove_count}I', data, offset) if remove_count else ()
+
+    sat_key = str(sat_id)
+
+    if msg_type == GCOV_MSG_FULL:
+        _binary_state[sat_key] = set(add_codes)
+    elif msg_type == GCOV_MSG_DELTA:
+        current = _binary_state.get(sat_key, set())
+        current.update(add_codes)
+        current.difference_update(rm_codes)
+        _binary_state[sat_key] = current
+    else:
+        return False
+
+    # 将整数编码转换为字符串格式供分析器使用
+    grid_strings = [f"0x{code:08x}" for code in _binary_state[sat_key]]
+    if grid_strings:
+        analyzer.add_coverage_data(sat_key, grid_strings)
+        return True
+    return False
+
 
 def process_coverage_message(message: str, analyzer, pending_fragments: Dict[str, Dict]) -> bool:
     """解析单条覆盖消息；若形成完整记录则写入分析器并返回True。"""
@@ -142,15 +194,26 @@ def process_coverage_message(message: str, analyzer, pending_fragments: Dict[str
 class GridCoverageAnalyzer:
     """格网覆盖分析器 - 支持两种格网类型，实现贪心算法"""
     
-    def __init__(self, time_step=1.0, target_coverage_ratio=0.8):
+    def __init__(self, time_step=1.0, target_coverage_ratio=0.8,
+                 enable_frr_injection=True, injection_throttle=2.0):
         """
         初始化
         Args:
             time_step: 时间步长（分钟，每次数据发送代表的模拟时间）
             target_coverage_ratio: 目标覆盖率（0-1之间）
+            enable_frr_injection: 是否启用 FRR 覆盖状态注入
+            injection_throttle: 注入节流间隔（秒）
         """
         self.time_step = time_step  # 每次数据发送 = 1分钟模拟时间
         self.target_coverage_ratio = target_coverage_ratio
+
+        # FRR 覆盖状态注入器
+        self.frr_injector: Optional[CoverageInjector] = None
+        if enable_frr_injection:
+            self.frr_injector = CoverageInjector(
+                throttle_interval=injection_throttle
+            )
+            print("[FRR注入] 覆盖状态注入器已启用")
         
         # 追踪每个卫星收到的消息次数（用于计算模拟时间）
         self.satellite_message_count = defaultdict(int)  # sat_id -> 消息次数
@@ -185,19 +248,23 @@ class GridCoverageAnalyzer:
     def add_coverage_data(self, sat_id: str, grid_list: List[str]):
         """
         添加覆盖数据，自动识别并分类格网类型
-        
+
         在both模式下，每个时间步每颗卫星会发送2条消息（ico + latlon）
         我们统计每个卫星的消息次数来推算模拟时间
         """
         self.total_messages += 1
         self.unique_sats.add(sat_id)
-        
+
         # 记录该卫星的消息次数
         self.satellite_message_count[sat_id] += 1
-        
+
         # 当前模拟时刻 = 该卫星收到的消息次数 - 1（从0开始）
         current_sim_minute = self.satellite_message_count[sat_id] - 1
-        
+
+        # 将覆盖数据注入 FRR isisd
+        if self.frr_injector is not None:
+            self.frr_injector.inject_coverage(sat_id, grid_list)
+
         # 按格网类型分类
         for grid_id in grid_list:
             grid_type = identify_grid_type(grid_id)
@@ -255,84 +322,83 @@ class GridCoverageAnalyzer:
     
     def apply_greedy_algorithm_for_type(self, grid_type: GridType):
         """
-        为指定格网类型应用贪心算法
-        
+        为指定格网类型应用贪心算法（堆优化版本）
+
         Args:
             grid_type: 格网类型（ICOSAHEDRAL 或 LATLON）
         """
         if grid_type not in self.grid_types_detected:
             print(f"[跳过] {grid_type.value} 格网未检测到数据")
             return
-        
+
         print(f"\n{'='*70}")
         print(f"开始对 {grid_type.value} 格网应用贪心算法...")
         print(f"{'='*70}")
-        
-        # 总模拟时长（分钟）
+
         total_duration = self.get_simulation_duration()
-        
-        # 目标覆盖时长 = 总时长 * 目标覆盖率
         target_duration = total_duration * self.target_coverage_ratio
-        
+
         print(f"格网类型: {grid_type.value}")
         print(f"目标覆盖率: {self.target_coverage_ratio*100:.0f}%")
         print(f"总模拟时长: {total_duration} 分钟")
         print(f"目标覆盖时长: {target_duration:.1f} 分钟")
-        
-        # 统计信息
+
         processed_grids = 0
         total_grids = len(self.unique_grids[grid_type])
-        
-        # 对每个格网应用贪心算法
+
         for grid_id in sorted(self.unique_grids[grid_type]):
             processed_grids += 1
             if processed_grids % 100 == 0:
                 print(f"[进度] 处理了 {processed_grids}/{total_grids} 个格网...")
-            
-            # 准备该格网的时间序列数据
+
             time_series = []
             for sat_id, timestamps in self.original_coverage[grid_type][grid_id].items():
-                if timestamps:  # 只包含有覆盖记录的卫星
+                if timestamps:
                     time_series.append((sat_id, timestamps))
-            
+
             if not time_series:
                 continue
-            
-            # 应用贪心算法
+
+            # 堆优化贪心：用 max-heap (负值) 按边际增益排序
             selected_satellites = []
-            covered_duration = 0
-            covered_times = set()
-            
-            while covered_duration < target_duration and time_series:
-                # 找到能增加最多覆盖时长的卫星
-                best_sat = None
-                best_增益 = 0
-                best_new_times = set()
-                
-                for sat_id, timestamps in time_series:
-                    new_times = set(timestamps) - covered_times
-                    增益 = len(new_times)
-                    
-                    if 增益 > best_增益:
-                        best_增益 = 增益
-                        best_sat = sat_id
-                        best_new_times = new_times
-                
-                if best_sat is None or best_增益 == 0:
-                    break  # 无法再增加覆盖
-                
+            covered_times: Set[float] = set()
+
+            # 初始化堆：计算每颗卫星的初始增益
+            heap = []
+            sat_time_sets = {}
+            for sat_id, timestamps in time_series:
+                ts = set(timestamps)
+                sat_time_sets[sat_id] = ts
+                gain = len(ts)
+                if gain > 0:
+                    heapq.heappush(heap, (-gain, sat_id))
+
+            while heap and len(covered_times) < target_duration:
+                neg_gain, best_sat = heapq.heappop(heap)
+
+                if best_sat not in sat_time_sets:
+                    continue
+
+                # 重新计算实际边际增益（lazy deletion 模式）
+                actual_new = sat_time_sets[best_sat] - covered_times
+                actual_gain = len(actual_new)
+
+                if actual_gain == 0:
+                    continue
+
+                # 检查堆顶是否有更优的候选
+                if heap and (-heap[0][0]) > actual_gain:
+                    heapq.heappush(heap, (-actual_gain, best_sat))
+                    continue
+
                 # 选择该卫星
-                selected_timestamps = [t for t in self.original_coverage[grid_type][grid_id][best_sat]]
+                selected_timestamps = list(self.original_coverage[grid_type][grid_id][best_sat])
                 selected_satellites.append((best_sat, selected_timestamps))
-                covered_times.update(best_new_times)
-                covered_duration = len(covered_times)
-                
-                # 从候选列表中移除已选择的卫星
-                time_series = [(s, t) for s, t in time_series if s != best_sat]
-            
-            # 保存贪心选择结果
+                covered_times.update(actual_new)
+                del sat_time_sets[best_sat]
+
             self.greedy_coverage[grid_type][grid_id] = selected_satellites
-        
+
         print(f"\n✓ {grid_type.value} 格网贪心算法完成")
         print(f"  处理格网数: {processed_grids}")
     
@@ -393,8 +459,16 @@ class GridCoverageAnalyzer:
                     print(f"    节省率: {reduction:.1f}%")
         
         print(f"{'='*70}")
-    
-    def generate_filename(self) -> str:
+
+        # FRR 注入统计
+        if self.frr_injector is not None:
+            stats = self.frr_injector.get_statistics()
+            print(f"\nFRR 覆盖状态注入统计:")
+            print(f"  成功注入次数: {stats['inject_count']}")
+            print(f"  节流跳过次数: {stats['throttled_count']}")
+            print(f"  错误次数: {stats['error_count']}")
+            print(f"  跟踪卫星数: {stats['tracked_satellites']}")
+            print(f"{'='*70}")
         """
         生成智能文件名，基于格网等级和卫星数量
         
@@ -512,8 +586,12 @@ class GridCoverageAnalyzer:
         
         return str(filename)
 
-def receive_grid_coverage_data():
-    """主函数：接收数据并保存"""
+def receive_grid_coverage_data(enable_frr_injection=True):
+    """主函数：接收数据并保存
+
+    Args:
+        enable_frr_injection: 是否启用 FRR 覆盖状态注入
+    """
     # Unix socket路径
     socket_path = "/tmp/mini_savi_grid_coverage.sock"
     
@@ -525,7 +603,10 @@ def receive_grid_coverage_data():
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
     
     # 创建分析器
-    analyzer = GridCoverageAnalyzer(time_step=1.0, target_coverage_ratio=0.8)
+    analyzer = GridCoverageAnalyzer(
+        time_step=1.0, target_coverage_ratio=0.8,
+        enable_frr_injection=enable_frr_injection
+    )
     
     try:
         # 绑定到Unix socket路径
@@ -558,17 +639,23 @@ def receive_grid_coverage_data():
             analyzer.real_current_time = time.time()
             
             try:
-                # 解析数据
-                message = data.decode('utf-8').strip()
-                if not message:
-                    continue
-                
-                if not process_coverage_message(message, analyzer, pending_fragments):
-                    parts = message.split(':', 1)
-                    if len(parts) == 2 and parts[1]:
+                # 检测是否为二进制消息（首字节为 0x01 或 0x02）
+                if len(data) >= GCOV_BINARY_HDR_SIZE and data[0] in (GCOV_MSG_FULL, GCOV_MSG_DELTA):
+                    if not process_binary_message(data, analyzer):
+                        print(f"[警告] 无效二进制消息 (len={len(data)})")
+                    # 二进制消息处理完毕，跳到进度打印
+                else:
+                    # 文本协议（原有逻辑）
+                    message = data.decode('utf-8').strip()
+                    if not message:
                         continue
-                    print(f"[警告] 无效消息格式: {message[:50]}")
-                    continue
+
+                    if not process_coverage_message(message, analyzer, pending_fragments):
+                        parts = message.split(':', 1)
+                        if len(parts) == 2 and parts[1]:
+                            continue
+                        print(f"[警告] 无效消息格式: {message[:50]}")
+                        continue
                 
                 # 定期打印进度
                 current_time = time.time()
@@ -595,6 +682,12 @@ def receive_grid_coverage_data():
         print(f"\n\n{'='*70}")
         print("收到停止信号，准备保存数据...")
         print(f"{'='*70}")
+
+        # 刷新待处理的 FRR 注入
+        if analyzer.frr_injector is not None:
+            analyzer.frr_injector.flush_pending()
+            analyzer.frr_injector.write_summary_file()
+            print("[FRR注入] 已刷新待处理更新并写入汇总文件")
         
         # 打印统计信息
         analyzer.print_statistics()
@@ -628,7 +721,10 @@ def receive_grid_coverage_data():
         sock.close()
         if os.path.exists(socket_path):
             os.unlink(socket_path)
+        if analyzer.frr_injector is not None:
+            analyzer.frr_injector.cleanup()
         print("Unix socket已关闭")
 
 if __name__ == "__main__":
-    receive_grid_coverage_data()
+    enable_injection = "--no-frr" not in sys.argv
+    receive_grid_coverage_data(enable_frr_injection=enable_injection)

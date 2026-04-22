@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -26,7 +27,15 @@ mininet_socket_send_impl(const char *message, size_t length)
 
   sent = sendto(sockfd, message, length, 0,
 		(const struct sockaddr *) &socket_addr, sizeof(socket_addr));
-  if (sent < 0 || (size_t) sent != length) {
+  if (sent < 0) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS) {
+      return TRUE; /* non-fatal: drop silently */
+    }
+    error("mininet socket send failed. Disabling mininet integration.");
+    mininet_socket_cleanup();
+    return FALSE;
+  }
+  if ((size_t) sent != length) {
     error("mininet socket send failed. Disabling mininet integration.");
     mininet_socket_cleanup();
     return FALSE;
@@ -47,6 +56,8 @@ mininet_socket_init(void)
     error("create Unix socket for mininet link info failed! Running in standalone mode.");
     return FALSE;
   }
+
+  fcntl(sockfd, F_SETFL, fcntl(sockfd, F_GETFL, 0) | O_NONBLOCK);
 
   memset(&socket_addr, 0, sizeof(socket_addr));
   socket_addr.sun_family = AF_UNIX;

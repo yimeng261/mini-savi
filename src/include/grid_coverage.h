@@ -15,6 +15,7 @@
 #ifndef _GRID_COVERAGE_H_
 #define _GRID_COVERAGE_H_
 
+#include <stdint.h>
 #include "Satellite.h"
 #include "stats_utils.h"
 
@@ -39,7 +40,8 @@ typedef struct {
 typedef struct {
     int lat_idx;                    /* 纬度索引 */
     int lon_idx;                    /* 经度索引 */
-    char code_string[64];           /* 编码字符串 "LAT##_LON###" */
+    int triangle_idx;               /* 三角形索引 (0=无后缀, 1=T1, 2=T2) */
+    char code_string[64];           /* 编码字符串 "LAT##_LON###_T#" */
 } LatLonCode;
 
 /* 格网单元结构 */
@@ -71,18 +73,38 @@ typedef struct {
     int max_latlon_coverage;        /* 经纬度格网最大容量 */
 } SatelliteCoverage;
 
+/* 空间索引：纬度带×经度带分桶 */
+#define SPATIAL_INDEX_BANDS 18      /* 每10度一个桶，覆盖-90到+90 */
+#define SPATIAL_INDEX_LON_BANDS 36  /* 每10度一个桶，覆盖-180到+180 */
+
+typedef struct {
+    int *cell_indices;              /* 该桶内的格网单元索引数组 */
+    int count;                      /* 桶内格网数量 */
+    int capacity;                   /* 桶容量 */
+} LatBand;
+
+typedef struct {
+    LatBand bands[SPATIAL_INDEX_BANDS][SPATIAL_INDEX_LON_BANDS];
+    double cell_margin_rad;         /* 格网单元角尺寸余量 (弧度) */
+    int built;                      /* 是否已构建 */
+} SpatialIndex;
+
 /* 格网覆盖数据结构 */
 typedef struct {
     /* 二十面体格网（icosahedral或both模式下使用） */
     GridCell *ico_cells;            /* 二十面体格网单元数组 */
     int ico_cell_count;             /* 二十面体格网单元数量 */
     int max_ico_cells;              /* 最大二十面体格网单元数 */
-    
+
     /* 经纬度格网（latlon或both模式下使用） */
     GridCell *latlon_cells;         /* 经纬度格网单元数组 */
     int latlon_cell_count;          /* 经纬度格网单元数量 */
     int max_latlon_cells;           /* 最大经纬度格网单元数 */
-    
+
+    /* 空间索引 */
+    SpatialIndex ico_spatial;       /* 二十面体格网空间索引 */
+    SpatialIndex latlon_spatial;    /* 经纬度格网空间索引 */
+
     SatelliteCoverage *satellite_coverages; /* 卫星覆盖记录数组 */
     int satellite_count;            /* 卫星数量 */
     int max_satellites;             /* 最大卫星数量 */
@@ -117,7 +139,6 @@ void quadtree_code_to_string(const QuadtreeCode *code, char *output);
 int quadtree_string_to_code(const char *code_string, QuadtreeCode *code);
 int quadtree_get_parent_code(const QuadtreeCode *code, QuadtreeCode *parent);
 int quadtree_get_children_codes(const QuadtreeCode *code, QuadtreeCode children[4]);
-int quadtree_codes_are_neighbors(const QuadtreeCode *code1, const QuadtreeCode *code2);
 
 /* 经纬度编码相关函数 */
 void latlon_code_to_string(const LatLonCode *code, char *output);
@@ -127,6 +148,48 @@ int latlon_string_to_code(const char *code_string, LatLonCode *code);
 int grid_coverage_socket_init(void);
 void grid_coverage_socket_cleanup(void);
 void grid_coverage_socket_send_data(void);
+
+/* Geomview 格网几何体显示 */
+void write_grid_geom(const void *);
+void grid_geom_gv_delete(void);
+void grid_geom_invalidate(void);
+void grid_geom_set_solid(const char *path);
+void grid_geom_set_wireframe(const char *path);
+char *grid_geom_on_cmd(int argc, char *argv[]);
+char *grid_geom_off_cmd(int argc, char *argv[]);
+
+/* 增量更新与二进制协议 */
+
+/* 二进制消息类型 */
+#define GCOV_MSG_FULL    0x01   /* 全量覆盖数据 */
+#define GCOV_MSG_DELTA   0x02   /* 增量更新（diff） */
+
+/* 二进制消息头 */
+typedef struct __attribute__((packed)) {
+    uint8_t  msg_type;          /* GCOV_MSG_FULL 或 GCOV_MSG_DELTA */
+    uint16_t satellite_id;      /* 卫星标识 */
+    uint32_t sequence;          /* 序列号（用于丢包检测） */
+    uint32_t timestamp;         /* 时间戳（epoch秒） */
+    uint16_t add_count;         /* 新增格网数量 */
+    uint16_t remove_count;      /* 移除格网数量（仅 DELTA 模式） */
+    /* 后跟 add_count 个 uint32_t（新增格网编码）
+     * 再跟 remove_count 个 uint32_t（移除格网编码） */
+} GridCoverageBinaryHeader;
+
+#define GCOV_BINARY_HDR_SIZE sizeof(GridCoverageBinaryHeader)
+
+/* 增量追踪状态（每颗卫星一份） */
+typedef struct {
+    uint32_t *prev_grid_codes;  /* 上一帧的格网编码数组（已排序） */
+    int prev_count;             /* 上一帧格网数量 */
+    int prev_capacity;          /* 数组容量 */
+    uint32_t sequence;          /* 当前序列号 */
+} SatelliteDeltaTracker;
+
+/* 增量追踪全局状态 */
+void grid_coverage_delta_init(int satellite_count);
+void grid_coverage_delta_cleanup(void);
+void grid_coverage_socket_send_data_binary(void);
 
 /* TCL命令接口 */
 char *grid_coverage_on_cmd(int argc, char *argv[]);

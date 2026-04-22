@@ -31,6 +31,7 @@
 
 #include "Satellite.h"
 #include "savi.h"
+#include "grid_coverage.h"
 
 ViewModule view_modules[] = {
 
@@ -63,7 +64,11 @@ ViewModule view_modules[] = {
 
   {write_footprints_geom, footprints_rebuild, footprint_display,
    footprints_relocate,
-   footprint_delete, footprints_off_cmd, footprints_gv_delete}
+   footprint_delete, footprints_off_cmd, footprints_gv_delete},
+
+  /* 格网几何体 - 保留用户设置，仅标记需要重新发送 */
+  {(void (*)(const Constellation *))write_grid_geom, NULL, NULL, NULL,
+   NULL, NULL, grid_geom_invalidate}
 
 };
 

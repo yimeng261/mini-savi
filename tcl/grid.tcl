@@ -14,6 +14,8 @@ global grid_flag grid_wireframe_flag grid_level grid_solid_file grid_wireframe_f
 global latlon_grid_flag latlon_grid_wireframe_flag latlon_solid_file latlon_wireframe_file
 global grid_coverage_flag grid_coverage_angle
 global grid_type lat_divisions lon_divisions
+global grid_solid_loaded_file grid_wireframe_loaded_file
+global latlon_solid_loaded_file latlon_wireframe_loaded_file
 set grid_flag 0
 set grid_wireframe_flag 0
 set latlon_grid_flag 0
@@ -32,6 +34,10 @@ set grid_solid_file ""
 set grid_wireframe_file ""
 set latlon_solid_file ""
 set latlon_wireframe_file ""
+set grid_solid_loaded_file ""
+set grid_wireframe_loaded_file ""
+set latlon_solid_loaded_file ""
+set latlon_wireframe_loaded_file ""
 
 proc grid(debug_log) {message} {
     global debug
@@ -41,28 +47,36 @@ proc grid(debug_log) {message} {
     }
 }
 
+proc grid(attach_geometry) {geometry_name handle_name file_path loaded_var_name} {
+    upvar #0 $loaded_var_name loaded_file
+
+    puts stderr "SaVi: GV CMD: (geometry $geometry_name < $file_path)"
+    geomview(puts) "(geometry $geometry_name < \"$file_path\")"
+    set loaded_file $file_path
+}
+
 proc grid(on) {} {
-    global grid_flag geomview_module grid_solid_file grid_level
+    global grid_flag grid_wireframe_flag geomview_module
+    global grid_solid_file grid_level
 
     puts stderr "SaVi: grid(on) 被调用，geomview_module=$geomview_module, grid_flag=$grid_flag"
-    
+
     if {![info exists geomview_module] || $geomview_module != 1} {
-        puts stderr "SaVi: geomview模块未启用，跳过格网显示"
         return
+    }
+
+    if {$grid_wireframe_flag == 1} {
+        set grid_wireframe_flag 0
+        grid_wireframe(off)
     }
 
     set grid_flag 1
 
-    # 确保格网文件已生成
     if {[grid(generate) $grid_level] && $grid_solid_file != ""} {
-        puts stderr "SaVi: 开始显示实体格网: $grid_solid_file"
-        geomview(begin)
-        geomview(puts) "(read geometry {define grid_solid_h < \"$grid_solid_file\"})"
-        geomview(puts) "(geometry grid_solid {: grid_solid_h})"
-        geomview(end)
+        satellites GRID_GEOM_ON solid $grid_solid_file
         puts stderr "SaVi: loaded grid solid from $grid_solid_file"
     } else {
-        puts stderr "SaVi: failed to load grid solid - file not found or generation failed"
+        puts stderr "SaVi: failed to load grid solid"
         set grid_flag 0
     }
 }
@@ -70,44 +84,36 @@ proc grid(on) {} {
 proc grid(off) {} {
     global grid_flag geomview_module
 
-    puts stderr "SaVi: grid(off) 被调用，geomview_module=$geomview_module, grid_flag=$grid_flag"
-    
     if {![info exists geomview_module] || $geomview_module != 1} {
-        puts stderr "SaVi: geomview模块未启用，跳过格网关闭"
         return
     }
 
     set grid_flag 0
-
-    puts stderr "SaVi: 开始关闭实体格网"
-    geomview(begin)
-    geomview(puts) "(geometry grid_solid {})"
-    geomview(end)
-    puts stderr "SaVi: 实体格网已关闭"
+    satellites GRID_GEOM_OFF solid
 }
 
 proc grid_wireframe(on) {} {
-    global grid_wireframe_flag geomview_module grid_wireframe_file grid_level
+    global grid_flag grid_wireframe_flag geomview_module
+    global grid_wireframe_file grid_level
 
     puts stderr "SaVi: grid_wireframe(on) 被调用，geomview_module=$geomview_module, grid_wireframe_flag=$grid_wireframe_flag"
-    
+
     if {![info exists geomview_module] || $geomview_module != 1} {
-        puts stderr "SaVi: geomview模块未启用，跳过线框格网显示"
         return
+    }
+
+    if {$grid_flag == 1} {
+        set grid_flag 0
+        grid(off)
     }
 
     set grid_wireframe_flag 1
 
-    # 确保格网文件已生成
     if {[grid(generate) $grid_level] && $grid_wireframe_file != ""} {
-        puts stderr "SaVi: 开始显示线框格网: $grid_wireframe_file"
-        geomview(begin)
-        geomview(puts) "(read geometry {define grid_wireframe_h < \"$grid_wireframe_file\"})"
-        geomview(puts) "(geometry grid_wireframe {: grid_wireframe_h})"
-        geomview(end)
+        satellites GRID_GEOM_ON wireframe $grid_wireframe_file
         puts stderr "SaVi: loaded grid wireframe from $grid_wireframe_file"
     } else {
-        puts stderr "SaVi: failed to load grid wireframe - file not found or generation failed"
+        puts stderr "SaVi: failed to load grid wireframe"
         set grid_wireframe_flag 0
     }
 }
@@ -115,32 +121,31 @@ proc grid_wireframe(on) {} {
 proc grid_wireframe(off) {} {
     global grid_wireframe_flag geomview_module
 
-    puts stderr "SaVi: grid_wireframe(off) 被调用，geomview_module=$geomview_module, grid_wireframe_flag=$grid_wireframe_flag"
-    
     if {![info exists geomview_module] || $geomview_module != 1} {
-        puts stderr "SaVi: geomview模块未启用，跳过线框格网关闭"
         return
     }
 
     set grid_wireframe_flag 0
-
-    puts stderr "SaVi: 开始关闭线框格网"
-    geomview(begin)
-    geomview(puts) "(geometry grid_wireframe {})"
-    geomview(end)
-    puts stderr "SaVi: 线框格网已关闭"
+    satellites GRID_GEOM_OFF wireframe
 }
 
 # ========== 经纬度格网显示功能 ==========
 
 proc latlon_grid(on) {} {
-    global latlon_grid_flag geomview_module latlon_solid_file lat_divisions lon_divisions
+    global latlon_grid_flag latlon_grid_wireframe_flag geomview_module
+    global latlon_solid_file lat_divisions lon_divisions latlon_solid_loaded_file
     
     puts stderr "SaVi: latlon_grid(on) 被调用"
     
     if {![info exists geomview_module] || $geomview_module != 1} {
         puts stderr "SaVi: geomview模块未启用，跳过经纬度格网显示"
         return
+    }
+
+    if {$latlon_grid_wireframe_flag == 1} {
+        puts stderr "SaVi: 经纬度实体格网与线框互斥，关闭线框格网"
+        set latlon_grid_wireframe_flag 0
+        latlon_grid_wireframe(off)
     }
     
     set latlon_grid_flag 1
@@ -149,8 +154,8 @@ proc latlon_grid(on) {} {
     if {[latlon_grid(generate) $lat_divisions $lon_divisions] && $latlon_solid_file != ""} {
         puts stderr "SaVi: 开始显示经纬度实体格网: $latlon_solid_file"
         geomview(begin)
-        geomview(puts) "(read geometry {define latlon_grid_solid_h < \"$latlon_solid_file\"})"
-        geomview(puts) "(geometry latlon_grid_solid {: latlon_grid_solid_h})"
+        grid(attach_geometry) "latlon_grid_solid" "latlon_grid_solid_h" $latlon_solid_file \
+            "latlon_solid_loaded_file"
         geomview(end)
         puts stderr "SaVi: loaded latlon grid solid from $latlon_solid_file"
     } else {
@@ -160,7 +165,7 @@ proc latlon_grid(on) {} {
 }
 
 proc latlon_grid(off) {} {
-    global latlon_grid_flag geomview_module
+    global latlon_grid_flag geomview_module latlon_solid_loaded_file
     
     if {![info exists geomview_module] || $geomview_module != 1} {
         return
@@ -171,11 +176,13 @@ proc latlon_grid(off) {} {
     geomview(begin)
     geomview(puts) "(delete latlon_grid_solid)"
     geomview(end)
+    set latlon_solid_loaded_file ""
     puts stderr "SaVi: unloaded latlon grid solid"
 }
 
 proc latlon_grid_wireframe(on) {} {
-    global latlon_grid_wireframe_flag geomview_module latlon_wireframe_file lat_divisions lon_divisions
+    global latlon_grid_flag latlon_grid_wireframe_flag geomview_module
+    global latlon_wireframe_file lat_divisions lon_divisions latlon_wireframe_loaded_file
     
     puts stderr "SaVi: latlon_grid_wireframe(on) 被调用"
     
@@ -183,14 +190,20 @@ proc latlon_grid_wireframe(on) {} {
         puts stderr "SaVi: geomview模块未启用，跳过经纬度格网线框显示"
         return
     }
+
+    if {$latlon_grid_flag == 1} {
+        puts stderr "SaVi: 经纬度线框格网与实体格网互斥，关闭实体格网"
+        set latlon_grid_flag 0
+        latlon_grid(off)
+    }
     
     set latlon_grid_wireframe_flag 1
     
     if {[latlon_grid(generate) $lat_divisions $lon_divisions] && $latlon_wireframe_file != ""} {
         puts stderr "SaVi: 开始显示经纬度格网线框: $latlon_wireframe_file"
         geomview(begin)
-        geomview(puts) "(read geometry {define latlon_grid_wireframe_h < \"$latlon_wireframe_file\"})"
-        geomview(puts) "(geometry latlon_grid_wireframe {: latlon_grid_wireframe_h})"
+        grid(attach_geometry) "latlon_grid_wireframe" "latlon_grid_wireframe_h" \
+            $latlon_wireframe_file "latlon_wireframe_loaded_file"
         geomview(end)
         puts stderr "SaVi: loaded latlon grid wireframe from $latlon_wireframe_file"
     } else {
@@ -200,7 +213,7 @@ proc latlon_grid_wireframe(on) {} {
 }
 
 proc latlon_grid_wireframe(off) {} {
-    global latlon_grid_wireframe_flag geomview_module
+    global latlon_grid_wireframe_flag geomview_module latlon_wireframe_loaded_file
     
     if {![info exists geomview_module] || $geomview_module != 1} {
         return
@@ -211,6 +224,7 @@ proc latlon_grid_wireframe(off) {} {
     geomview(begin)
     geomview(puts) "(delete latlon_grid_wireframe)"
     geomview(end)
+    set latlon_wireframe_loaded_file ""
     puts stderr "SaVi: unloaded latlon grid wireframe"
 }
 
@@ -227,11 +241,25 @@ proc latlon_grid(generate) {lat_div lon_div} {
         set latlon_wireframe_file $wireframe_path
         puts stderr "SaVi: 使用现有经纬度格网文件 ${lat_div}x${lon_div}"
         return 1
-    } else {
-        puts stderr "SaVi: 经纬度格网文件不存在: ${lat_div}x${lon_div}"
-        puts stderr "SaVi: 请先运行: ./build_latlon_grid.sh"
+    }
+
+    puts stderr "SaVi: 经纬度格网文件不存在: ${lat_div}x${lon_div}"
+    puts stderr "SaVi: 自动生成经纬度格网 ${lat_div}x${lon_div}..."
+
+    if {[catch {exec ./tools/latlon_grid_calc --lat $lat_div --lon $lon_div} result]} {
+        puts stderr "SaVi: 自动生成经纬度格网失败: $result"
         return 0
     }
+
+    if {[file exists $solid_path] && [file exists $wireframe_path]} {
+        set latlon_solid_file $solid_path
+        set latlon_wireframe_file $wireframe_path
+        puts stderr "SaVi: 经纬度格网自动生成完成: ${lat_div}x${lon_div}"
+        return 1
+    }
+
+    puts stderr "SaVi: 经纬度格网生成命令已执行，但目标文件仍不存在"
+    return 0
 }
 
 # 经纬度格网切换函数
@@ -454,9 +482,9 @@ proc grid(build) {} {
     frame $display_frame.ico
     label $display_frame.ico.label -text "Icosahedral Grid:" -font $FONT(label)
     checkbutton $display_frame.ico.solid -text "Show Solid" -variable grid_flag \
-        -command "grid(toggle_solid)" -font $FONT(button)
+        -font $FONT(button)
     checkbutton $display_frame.ico.wire -text "Show Wireframe" -variable grid_wireframe_flag \
-        -command "grid(toggle_wireframe)" -font $FONT(button)
+        -font $FONT(button)
     pack $display_frame.ico.label -side left -padx 0.1c
     pack $display_frame.ico.solid $display_frame.ico.wire -side left -padx 0.05c
     
@@ -722,6 +750,11 @@ proc grid_coverage(on) {} {
 proc grid_coverage_latlon(on) {lat_div lon_div} {
     grid(debug_log) "SaVi: grid_coverage_latlon(on) 被调用 - 使用经纬度格网"
     grid(debug_log) "SaVi: 纬度划分: $lat_div, 经度划分: $lon_div"
+
+    if {![latlon_grid(generate) $lat_div $lon_div]} {
+        puts stderr "SaVi: failed to prepare latlon grid files for coverage"
+        return 0
+    }
     
     # 初始化格网覆盖系统（经纬度）
     set result [satellites GRID_COVERAGE_ON_LATLON $lat_div $lon_div]
@@ -752,6 +785,15 @@ proc grid_coverage_both(on) {ico_level lat_div lon_div} {
     grid(debug_log) "SaVi: grid_coverage_both(on) 被调用"
     grid(debug_log) "SaVi: 二十面体级别: $ico_level"
     grid(debug_log) "SaVi: 经纬度划分: ${lat_div}x${lon_div}"
+
+    if {![grid(generate) $ico_level]} {
+        puts stderr "SaVi: failed to prepare icosahedral grid files for coverage"
+        return 0
+    }
+    if {![latlon_grid(generate) $lat_div $lon_div]} {
+        puts stderr "SaVi: failed to prepare latlon grid files for coverage"
+        return 0
+    }
     
     # 直接调用GRID_COVERAGE_ON_BOTH命令，一次性加载两种格网
     set result [satellites GRID_COVERAGE_ON_BOTH $ico_level $lat_div $lon_div]

@@ -484,7 +484,6 @@ write_satellites_geom(const Constellation * pconstellation)
       gv_send("})\n");
 
     } else {
-
       /* write out as a LIST of VECT */
       gv_send("(geometry Satellites {LIST\n");
 
@@ -535,9 +534,6 @@ write_satellites_geom(const Constellation * pconstellation)
           } else {
                 gv_send("{appearance {linewidth 7} VECT\n");
                 fprintf(gv_out, "%d %d 1\n", num_view_sats, num_view_sats);
-                printf("%d %d 1\n", num_view_sats, num_view_sats);
-                fprintf(gv_out, "%d %d 1\n", num_view_sats, num_view_sats);
-                printf("%d %d 1\n", num_view_sats, num_view_sats);
                 for (i = 0; i < num_view_sats; i++) {
                   gv_send("1 ");
                 }
@@ -551,8 +547,6 @@ write_satellites_geom(const Constellation * pconstellation)
                   if (s->can_display_satellite) {
                     fprintf(gv_out, "%f %f %f\n", s->transform[3][0],
                       s->transform[3][1], s->transform[3][2]);
-                    printf("%f %f %f\n", s->transform[3][0],
-                      s->transform[3][1], s->transform[3][2]);
                   }
                 }
                 gv_send("0 1 0 1}\n");
@@ -563,9 +557,7 @@ write_satellites_geom(const Constellation * pconstellation)
       if (num_tag_sats > 0) {
           fprintf(gv_out, "{appearance {linewidth 15} VECT\n%d %d 1\n",
             num_tag_sats, num_tag_sats);
-          printf("{appearance {linewidth 15} VECT\n%d %d 1\n",
-            num_tag_sats, num_tag_sats);
-            for (i = 0; i < num_tag_sats; i++) {
+          for (i = 0; i < num_tag_sats; i++) {
             gv_send("1 ");
           }
           gv_send("\n1 ");
@@ -577,8 +569,6 @@ write_satellites_geom(const Constellation * pconstellation)
             s = sl->s;
             if (s->tag) {
               fprintf(gv_out, "%f %f %f\n", s->transform[3][0],
-                s->transform[3][1], s->transform[3][2]);
-              printf("%f %f %f\n", s->transform[3][0],
                 s->transform[3][1], s->transform[3][2]);
             }
           }

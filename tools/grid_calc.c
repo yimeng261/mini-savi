@@ -80,6 +80,57 @@ const double offset[4][3][2]={
 GridMesh grid_mesh = {0};
 static char output_dir[256] = DEFAULT_FILEPATH;
 
+/* Spatial hash table for O(1) vertex deduplication */
+#define VERTEX_HASH_EMPTY -1
+
+typedef struct {
+    int *table;
+    int capacity;
+    int mask;
+} VertexHashTable;
+
+static VertexHashTable vertex_ht = {0};
+
+static void vertex_ht_init(int expected_count) {
+    int cap = 1;
+    while (cap < expected_count * 4) cap <<= 1;
+    vertex_ht.capacity = cap;
+    vertex_ht.mask = cap - 1;
+    vertex_ht.table = malloc(cap * sizeof(int));
+    for (int i = 0; i < cap; i++) vertex_ht.table[i] = VERTEX_HASH_EMPTY;
+}
+
+static void vertex_ht_free(void) {
+    if (vertex_ht.table) {
+        free(vertex_ht.table);
+        vertex_ht.table = NULL;
+    }
+}
+
+static int vertex_ht_find_or_insert(double x, double y, double z, int new_idx) {
+    int ix = (int)(x * 1e5 + (x >= 0 ? 0.5 : -0.5));
+    int iy = (int)(y * 1e5 + (y >= 0 ? 0.5 : -0.5));
+    int iz = (int)(z * 1e5 + (z >= 0 ? 0.5 : -0.5));
+    unsigned int h = ((unsigned int)ix * 73856093u ^
+                      (unsigned int)iy * 19349663u ^
+                      (unsigned int)iz * 83492791u) & vertex_ht.mask;
+
+    while (1) {
+        int idx = vertex_ht.table[h];
+        if (idx == VERTEX_HASH_EMPTY) {
+            vertex_ht.table[h] = new_idx;
+            return VERTEX_HASH_EMPTY;
+        }
+        double dx = grid_mesh.vertices[idx][0] - x;
+        double dy = grid_mesh.vertices[idx][1] - y;
+        double dz = grid_mesh.vertices[idx][2] - z;
+        if (dx*dx + dy*dy + dz*dz < 1e-10) {
+            return idx;
+        }
+        h = (h + 1) & vertex_ht.mask;
+    }
+}
+
 // 函数声明
 int add_vertex_xyz(double x, double y, double z);
 void write_grid_metadata(const char *base_filename);
@@ -186,16 +237,6 @@ int add_vertex(double lon, double lat) {
 
 // 添加顶点到网格（通过3D坐标），返回顶点索引
 int add_vertex_xyz(double x, double y, double z) {
-    // 检查是否已存在相同的顶点（避免重复）
-    for (int i = 0; i < grid_mesh.vertex_count; i++) {
-        double dx = grid_mesh.vertices[i][0] - x;
-        double dy = grid_mesh.vertices[i][1] - y;
-        double dz = grid_mesh.vertices[i][2] - z;
-        if (dx*dx + dy*dy + dz*dz < 1e-10) {
-            return i;
-        }
-    }
-    
     // 检查是否需要扩展内存
     if (grid_mesh.vertex_count >= grid_mesh.max_vertices) {
         if (!expand_grid_mesh()) {
@@ -203,7 +244,25 @@ int add_vertex_xyz(double x, double y, double z) {
             return -1;
         }
     }
-    
+
+    // 使用哈希表查找或插入
+    if (vertex_ht.table) {
+        int found = vertex_ht_find_or_insert(x, y, z, grid_mesh.vertex_count);
+        if (found != VERTEX_HASH_EMPTY) {
+            return found;
+        }
+    } else {
+        // 回退到线性扫描
+        for (int i = 0; i < grid_mesh.vertex_count; i++) {
+            double dx = grid_mesh.vertices[i][0] - x;
+            double dy = grid_mesh.vertices[i][1] - y;
+            double dz = grid_mesh.vertices[i][2] - z;
+            if (dx*dx + dy*dy + dz*dz < 1e-10) {
+                return i;
+            }
+        }
+    }
+
     // 添加新顶点
     grid_mesh.vertices[grid_mesh.vertex_count][0] = x;
     grid_mesh.vertices[grid_mesh.vertex_count][1] = y;
@@ -470,23 +529,15 @@ void write_oogl_grid(const char* filename) {
     }
     
     // OOGL文件头
-    fprintf(fp, "# Grid mesh generated from icosahedral subdivision\n");
-    fprintf(fp, "# SaVi geomview format\n");
-    fprintf(fp, "appearance {\n");
-    fprintf(fp, "    material { diffuse 0.3 0.9 0.3 alpha 0.8 }\n");
-    fprintf(fp, "    linewidth 1\n");
-    fprintf(fp, "    shading flat\n");
-    fprintf(fp, "    transparent\n");
-    fprintf(fp, "    +edge\n");
-    fprintf(fp, "}\n");
-    fprintf(fp, "OFF\n");
+    fprintf(fp, "appearance { +edge }\n");
+    fprintf(fp, "COFF\n");
     fprintf(fp, "%d %d %d\n", grid_mesh.vertex_count, grid_mesh.face_count, 0);
-    
-    // 输出顶点坐标
+
+    // 输出顶点坐标（COFF格式：x y z r g b a）
     for (int i = 0; i < grid_mesh.vertex_count; i++) {
-        fprintf(fp, "%.6f %.6f %.6f\n", 
-                grid_mesh.vertices[i][0], 
-                grid_mesh.vertices[i][1], 
+        fprintf(fp, "%.6f %.6f %.6f 0.3 0.9 0.3 1.0\n",
+                grid_mesh.vertices[i][0],
+                grid_mesh.vertices[i][1],
                 grid_mesh.vertices[i][2]);
     }
     
@@ -554,55 +605,60 @@ void write_oogl_wireframe(const char* filename) {
         return;
     }
     int edge_count = 0;
-    
+
     for (int i = 0; i < grid_mesh.face_count; i++) {
         for (int j = 0; j < 3; j++) {
             int v1 = grid_mesh.faces[i][j];
             int v2 = grid_mesh.faces[i][(j+1)%3];
-            
-            // 确保边的顶点按升序排列，避免重复边
+
+            // 确保边的顶点按升序排列
             if (v1 > v2) {
                 int temp = v1; v1 = v2; v2 = temp;
             }
-            
-            // 检查边是否已存在
-            int exists = 0;
-            for (int k = 0; k < edge_count; k++) {
-                if (edges[k][0] == v1 && edges[k][1] == v2) {
-                    exists = 1;
-                    break;
-                }
-            }
-            
-            if (!exists) {
-                edges[edge_count][0] = v1;
-                edges[edge_count][1] = v2;
-                edge_count++;
-            }
+
+            edges[edge_count][0] = v1;
+            edges[edge_count][1] = v2;
+            edge_count++;
         }
     }
-    
-    // 输出SKEL格式（线框）
-    fprintf(fp, "# Grid wireframe mesh\n");
-    fprintf(fp, "appearance {\n");
-    fprintf(fp, "    material { diffuse 0.8 0.8 0.2 alpha 0.9 }\n");
-    fprintf(fp, "    linewidth 3\n");
-    fprintf(fp, "}\n");
-    fprintf(fp, "SKEL\n");
-    fprintf(fp, "%d %d\n", grid_mesh.vertex_count, edge_count);
-    
-    // 输出所有顶点坐标
-    for (int i = 0; i < grid_mesh.vertex_count; i++) {
-        fprintf(fp, "%.6f %.6f %.6f\n", 
-                grid_mesh.vertices[i][0], 
-                grid_mesh.vertices[i][1], 
-                grid_mesh.vertices[i][2]);
+
+    // 排序后去重
+    {
+        int compare_edges(const void *a, const void *b) {
+            const int *ea = (const int *)a;
+            const int *eb = (const int *)b;
+            if (ea[0] != eb[0]) return ea[0] - eb[0];
+            return ea[1] - eb[1];
+        }
+        qsort(edges, edge_count, sizeof(int[2]), compare_edges);
+        int unique = 0;
+        for (int i = 0; i < edge_count; i++) {
+            if (i == 0 || edges[i][0] != edges[i-1][0] || edges[i][1] != edges[i-1][1]) {
+                edges[unique][0] = edges[i][0];
+                edges[unique][1] = edges[i][1];
+                unique++;
+            }
+        }
+        edge_count = unique;
     }
     
-    // 输出边（顶点索引）
+    // 输出VECT格式线框（纯线段，无面片）
+    fprintf(fp, "appearance { linewidth 2 }\n");
+    fprintf(fp, "VECT\n");
+    fprintf(fp, "%d %d 1\n", edge_count, edge_count * 2);
+    for (int i = 0; i < edge_count; i++) fprintf(fp, "2\n");
+    fprintf(fp, "1\n");
+    for (int i = 1; i < edge_count; i++) fprintf(fp, "0\n");
     for (int i = 0; i < edge_count; i++) {
-        fprintf(fp, "2 %d %d\n", edges[i][0], edges[i][1]);
+        fprintf(fp, "%.6f %.6f %.6f\n%.6f %.6f %.6f\n",
+                grid_mesh.vertices[edges[i][0]][0],
+                grid_mesh.vertices[edges[i][0]][1],
+                grid_mesh.vertices[edges[i][0]][2],
+                grid_mesh.vertices[edges[i][1]][0],
+                grid_mesh.vertices[edges[i][1]][1],
+                grid_mesh.vertices[edges[i][1]][2]);
     }
+    fprintf(fp, "0.8 0.8 0.2 0.9\n");
     
     fclose(fp);
     free(edges);  // 释放边数组内存
@@ -677,6 +733,8 @@ int main(int argc, char* argv[])
         printf("内存初始化失败！\n");
         return 1;
     }
+
+    vertex_ht_init(estimated_vertices);
     
     printf("正在生成%d级二十面体格网...\n", n);
     
@@ -715,6 +773,7 @@ int main(int argc, char* argv[])
     printf("元数据文件：%s.json\n", filename);
     
     // 释放内存
+    vertex_ht_free();
     free_grid_mesh();
     
     return 0;
@@ -793,18 +852,26 @@ unsigned int validate_face_count(int level) {
     return 1;
 }
 
+static int compare_code_strings(const void *a, const void *b) {
+    const QuadtreeCode *ca = (const QuadtreeCode *)a;
+    const QuadtreeCode *cb = (const QuadtreeCode *)b;
+    return strcmp(ca->code_string, cb->code_string);
+}
+
 unsigned int validate_unique_quadtree_codes(void) {
-    for (int i = 0; i < grid_mesh.face_count; i++) {
-        for (int j = i + 1; j < grid_mesh.face_count; j++) {
-            if (strcmp(grid_mesh.face_codes[i].code_string,
-                       grid_mesh.face_codes[j].code_string) == 0) {
-                fprintf(stderr, "校验失败：发现重复编码 %s\n",
-                        grid_mesh.face_codes[i].code_string);
-                return 0;
-            }
+    QuadtreeCode *sorted = malloc(grid_mesh.face_count * sizeof(QuadtreeCode));
+    if (!sorted) return 0;
+    memcpy(sorted, grid_mesh.face_codes, grid_mesh.face_count * sizeof(QuadtreeCode));
+    qsort(sorted, grid_mesh.face_count, sizeof(QuadtreeCode), compare_code_strings);
+
+    for (int i = 1; i < grid_mesh.face_count; i++) {
+        if (strcmp(sorted[i-1].code_string, sorted[i].code_string) == 0) {
+            fprintf(stderr, "校验失败：发现重复编码 %s\n", sorted[i].code_string);
+            free(sorted);
+            return 0;
         }
     }
-
+    free(sorted);
     return 1;
 }
 
@@ -899,14 +966,15 @@ void quadtree_code_to_string(const QuadtreeCode *code, char *output) {
         snprintf(output, QUADTREE_CODE_LENGTH, "F%02d", code->base_face_id);
     } else {
         // 有细分级别，显示完整路径
-        char path_str[MAX_QUADTREE_DEPTH * 2 + 1] = {0};
-        
+        char path_str[MAX_QUADTREE_DEPTH + 1];
+        int pos = 0;
+
         for (int i = code->level - 1; i >= 0; i--) {
             int branch = (code->path_code >> (i * 2)) & 0x3;
-            char branch_char = '0' + branch;
-            strncat(path_str, &branch_char, 1);
+            path_str[pos++] = '0' + branch;
         }
-        
+        path_str[pos] = '\0';
+
         snprintf(output, QUADTREE_CODE_LENGTH, "F%02d_%s", code->base_face_id, path_str);
     }
 }

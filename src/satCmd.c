@@ -173,6 +173,8 @@ static struct Key key[] = {
   {"GRID_COVERAGE_SET_ANGLE", grid_coverage_set_angle_cmd},
   {"GRID_COVERAGE_STATS", grid_coverage_stats_cmd},
   {"GRID_COVERAGE_QUERY_CODE", grid_coverage_query_code_cmd},
+  {"GRID_GEOM_ON", grid_geom_on_cmd},
+  {"GRID_GEOM_OFF", grid_geom_off_cmd},
 
   /* other */
   {"COLOR_UPDATE", coverage_color_update_cmd},

@@ -420,33 +420,22 @@ time_to_true_anomaly(const double t, const CentralBody * pcb,
     return mean_anomaly(t, pcb->mu, a, T);
   }
 
-  if (e < 0.1) {
-    /* mean anomaly is a good seed for Newton's method */
-    M = mean_anomaly(t, pcb->mu, a, T);
-    E = M;
-    M_n = M - e * sin(M);
-    incr = (M - M_n) / (1 - e * cos(E));
-    while (fabs(incr) > ANOMALY_COMPUTATION_TOLERANCE) {
-      E += incr;
-      M_n = E - e * sin(E);
-      incr = (M - M_n) / (1 - e * cos(E));
-    }
-  } else {
-    /* will force each iterate of Newton's method to remain in 0 to 2pi */
-    M = mean_anomaly(t, pcb->mu, a, T);
-    E = M;
-    M_n = M - e * sin(M);
-    incr = (M - M_n) / (1 - e * cos(E));
-    while (fabs(incr) > ANOMALY_COMPUTATION_TOLERANCE) {
-      E += incr;
+  M = mean_anomaly(t, pcb->mu, a, T);
+  E = M;
+  M_n = M - e * sin(M);
+  incr = (M - M_n) / (1 - e * cos(E));
+  while (fabs(incr) > ANOMALY_COMPUTATION_TOLERANCE) {
+    E += incr;
+    /* For higher eccentricity, clamp E to [0, 2pi] to keep Newton stable */
+    if (e >= 0.1) {
       if (E < 0) {
 	E = (E - incr) / 2.0;
       } else if (E > TWOPI) {
 	E = (E - incr + TWOPI) / 2.0;
       }
-      M_n = E - e * sin(E);
-      incr = (M - M_n) / (1 - e * cos(E));
     }
+    M_n = E - e * sin(E);
+    incr = (M - M_n) / (1 - e * cos(E));
   }
 
   return eccentric_anomaly_to_true_anomaly(E, e);

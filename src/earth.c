@@ -71,6 +71,7 @@ earth_create_geom(void)
     gv_create_geom("Central_Body", "central_t", "unit_sphere_h");
     gv_stop();
   }
+  earth_created = TRUE;
   earth_geom_exists = TRUE;
 }
 
@@ -214,25 +215,10 @@ earth_off_cmd(int argc, char *argv[])
   if (!earth_on_flag) return status;
 
   earth_on_flag = FALSE;
-
-  if (use_fancy_earth) {
-      /* we nest in gv_start/stop to hide temporary cosmetic changes -
-       * this is the same idea used when loading tcl scripts
-       * to prevent incremental per-new-satellite drawing updates.
-       */
-      if (geomview_module) gv_start();
-      fancy_off_cmd(argc, argv);
-      fancy_on_cmd(argc, argv);
-      if (geomview_module) gv_stop();
-  } else if (use_simple_earth) {
-      if (geomview_module) gv_start();
-      simple_off_cmd(argc, argv);
-      simple_on_cmd(argc, argv);
-      if (geomview_module) gv_stop();
-  } else {
-     /* just destroy sphere */
-     earth_delete_geom();
-  }
+  /* Turning Earth off should remove the visible object entirely.
+   * Callers that immediately turn it back on, like texture refresh,
+   * will recreate the correct variant in earth_on_cmd(). */
+  earth_delete_geom();
 
   return status;
 }
